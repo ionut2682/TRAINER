@@ -1,6 +1,12 @@
 "use client";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import {
+  getUserId, getSessions, saveSession, deleteSession,
+  getFavorite, addFavorit, deleteFavorit,
+  getJurnal, addJurnal, deleteJurnal,
+  getProgres, addProgres, deleteProgres,
+} from "./lib/supabase";
 
 const TABS = ["💬 Chat", "❤️ Favorite", "📓 Jurnal", "📅 Săptămână", "⚖️ Progres", "🔔 Remindere", "🔍 Produs"];
 
@@ -19,11 +25,12 @@ function saveLS(key, val) {
   try { localStorage.setItem(key, JSON.stringify(val)); } catch {}
 }
 
-// ─── CHAT TAB ───────────────────────────────────────────────────────────────
+// ─── CHAT TAB ────────────────────────────────────────────────────────────────
 function ChatTab({ profil }) {
   const initMsg = { role: "assistant", content: "Salut! Sunt agentul tău personal de nutriție și sport.\n\nPot să:\n• 🥗 Generez rețete din ingredientele tale\n• 📅 Planific mesele pentru o zi întreagă\n• 📊 Calculez macro-urile oricărui preparat\n• 🏋️ Îți dau un plan sport adaptat obiectivelor tale\n• 📷 Analizez poze cu mâncare, frigider sau etichete\n• 📄 Citesc documente PDF sau text\n\nCu ce te ajut azi?" };
+  const newSessionObj = () => ({ id: "s_" + Math.random().toString(36).slice(2) + Date.now(), title: "Conversație nouă", messages: [initMsg] });
 
-  const [sessions, setSessions] = useState(() => loadLS("chat_sessions", [{ id: Date.now(), title: "Conversație nouă", messages: [initMsg] }]));
+  const [sessions, setSessions] = useState([newSessionObj()]);
   const [activeSession, setActiveSession] = useState(0);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
@@ -31,42 +38,50 @@ function ChatTab({ profil }) {
   const [imaginePreview, setImaginePreview] = useState(null);
   const [document, setDocument] = useState(null);
   const [documentNume, setDocumentNume] = useState(null);
-  const [showSidebar, setShowSidebar] = useState(false);
-  const [favorites, setFavorites] = useState(() => loadLS("retete_favorite", []));
+  const [userId, setUserId] = useState(null);
   const bottomRef = useRef(null);
   const fileRef = useRef(null);
   const docRef = useRef(null);
 
+  useEffect(() => {
+    const uid = getUserId();
+    setUserId(uid);
+    getSessions(uid).then(data => {
+      if (data && data.length > 0) setSessions(data);
+    });
+  }, []);
+
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [sessions, activeSession, loading]);
+
   const currentSession = sessions[activeSession] || sessions[0];
   const messages = currentSession?.messages || [initMsg];
 
-  useEffect(() => { saveLS("chat_sessions", sessions); }, [sessions]);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [sessions, activeSession, loading]);
-
-  function newSession() {
-    const s = { id: Date.now(), title: "Conversație nouă", messages: [initMsg] };
+  async function newSession() {
+    const s = newSessionObj();
     const updated = [s, ...sessions];
     setSessions(updated);
     setActiveSession(0);
-    setShowSidebar(false);
+    if (userId) await saveSession(userId, s);
   }
 
-  function deleteSession(idx) {
-    if (sessions.length === 1) { setSessions([{ id: Date.now(), title: "Conversație nouă", messages: [initMsg] }]); setActiveSession(0); return; }
+  async function removeSession(idx) {
+    const s = sessions[idx];
+    if (userId) await deleteSession(userId, s.id);
+    if (sessions.length === 1) { const ns = newSessionObj(); setSessions([ns]); setActiveSession(0); if (userId) await saveSession(userId, ns); return; }
     const updated = sessions.filter((_, i) => i !== idx);
     setSessions(updated);
     setActiveSession(0);
   }
 
-  function updateMessages(newMsgs) {
+  async function updateMessages(newMsgs) {
     setSessions(prev => {
       const updated = [...prev];
-      updated[activeSession] = { ...updated[activeSession], messages: newMsgs };
-      // Auto-title from first user message
       const firstUser = newMsgs.find(m => m.role === "user");
-      if (firstUser && updated[activeSession].title === "Conversație nouă") {
-        updated[activeSession].title = (firstUser.content?.toString() || "").slice(0, 30) + "...";
-      }
+      const title = firstUser && updated[activeSession]?.title === "Conversație nouă"
+        ? (typeof firstUser.content === "string" ? firstUser.content : "Conversație").slice(0, 30) + "..."
+        : updated[activeSession]?.title;
+      updated[activeSession] = { ...updated[activeSession], messages: newMsgs, title };
+      if (userId) saveSession(userId, updated[activeSession]);
       return updated;
     });
   }
@@ -91,12 +106,9 @@ function ChatTab({ profil }) {
     if (docRef.current) docRef.current.value = "";
   }
 
-  function saveFavorite(content) {
-    const title = content.slice(0, 50) + "...";
-    const fav = { id: Date.now(), title, content, data: new Date().toLocaleDateString("ro-RO") };
-    const updated = [fav, ...favorites];
-    setFavorites(updated);
-    saveLS("retete_favorite", updated);
+  async function saveFavorite(content) {
+    const item = { title: content.slice(0, 50) + "...", content };
+    if (userId) await addFavorit(userId, item);
     alert("✅ Salvat la favorite!");
   }
 
@@ -115,10 +127,10 @@ function ChatTab({ profil }) {
     let apiContent = [];
     if (imagine) {
       apiContent.push({ type: "image", source: { type: "base64", media_type: imagine.type, data: imagine.data } });
-      apiContent.push({ type: "text", text: userText || "Analizează această imagine în contextul nutriției mele. Estimează caloriile și macro-urile dacă e mâncare, sugerează rețetă dacă e frigider, citește eticheta dacă e produs." });
+      apiContent.push({ type: "text", text: userText || "Analizează această imagine în contextul nutriției mele." });
     } else if (document) {
       apiContent.push({ type: "document", source: { type: "base64", media_type: document.type, data: document.data } });
-      apiContent.push({ type: "text", text: userText || "Citește documentul și extrage informațiile relevante pentru nutriție, sănătate sau sport." });
+      apiContent.push({ type: "text", text: userText || "Citește documentul și extrage informațiile relevante pentru nutriție sau sport." });
     } else {
       apiContent = userText;
     }
@@ -163,19 +175,17 @@ function ChatTab({ profil }) {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0 }}>
-      {/* Session bar */}
       <div style={{ display: "flex", gap: 8, padding: "0 20px 10px", overflowX: "auto" }}>
         <button onClick={newSession} style={{ background: "#22c55e", border: "none", borderRadius: 20, color: "white", padding: "5px 12px", fontSize: 12, cursor: "pointer", flexShrink: 0 }}>+ Nou</button>
         {sessions.map((s, i) => (
           <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 4, background: i === activeSession ? "#1a2a1a" : "#1a1f2e", border: `1px solid ${i === activeSession ? "#22c55e" : "#2a3040"}`, borderRadius: 20, padding: "4px 10px", cursor: "pointer", flexShrink: 0 }}
             onClick={() => setActiveSession(i)}>
             <span style={{ color: i === activeSession ? "#22c55e" : "#94a3b8", fontSize: 11, maxWidth: 120, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</span>
-            <span onClick={e => { e.stopPropagation(); deleteSession(i); }} style={{ color: "#ef4444", fontSize: 11, cursor: "pointer", marginLeft: 2 }}>✕</span>
+            <span onClick={e => { e.stopPropagation(); removeSession(i); }} style={{ color: "#ef4444", fontSize: 11, cursor: "pointer", marginLeft: 2 }}>✕</span>
           </div>
         ))}
       </div>
 
-      {/* Messages */}
       <div style={{ flex: 1, padding: "0 20px", display: "flex", flexDirection: "column", gap: 12, overflowY: "auto", paddingBottom: 8 }}>
         {messages.map((msg, i) => (
           <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start" }}>
@@ -199,7 +209,6 @@ function ChatTab({ profil }) {
         <div ref={bottomRef} />
       </div>
 
-      {/* Suggestions */}
       {messages.length <= 1 && (
         <div style={{ padding: "8px 20px", display: "flex", flexWrap: "wrap", gap: 8 }}>
           {SUGGESTIONS.map((s, i) => (
@@ -208,7 +217,6 @@ function ChatTab({ profil }) {
         </div>
       )}
 
-      {/* Attachment preview */}
       {(imaginePreview || documentNume) && (
         <div style={{ padding: "0 20px 8px" }}>
           <div style={{ display: "inline-flex", alignItems: "center", gap: 8, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, padding: "6px 10px" }}>
@@ -219,7 +227,6 @@ function ChatTab({ profil }) {
         </div>
       )}
 
-      {/* Input */}
       <div style={{ padding: "8px 20px 16px" }}>
         <div style={{ display: "flex", gap: 8, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 16, padding: "8px 8px 8px 12px", alignItems: "flex-end" }}>
           <button onClick={() => fileRef.current?.click()} style={{ width: 34, height: 34, borderRadius: 8, background: "#2a3040", border: "none", cursor: "pointer", fontSize: 15, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>📷</button>
@@ -234,14 +241,19 @@ function ChatTab({ profil }) {
   );
 }
 
-// ─── FAVORITE TAB ────────────────────────────────────────────────────────────
+// ─── FAVORITE TAB ─────────────────────────────────────────────────────────────
 function FavoriteTab() {
-  const [favorites, setFavorites] = useState(() => loadLS("retete_favorite", []));
+  const [favorites, setFavorites] = useState([]);
+  const [userId, setUserId] = useState(null);
 
-  function sterge(id) {
-    const updated = favorites.filter(f => f.id !== id);
-    setFavorites(updated);
-    saveLS("retete_favorite", updated);
+  useEffect(() => {
+    const uid = getUserId(); setUserId(uid);
+    getFavorite(uid).then(data => setFavorites(data || []));
+  }, []);
+
+  async function sterge(id) {
+    if (userId) await deleteFavorit(userId, id);
+    setFavorites(prev => prev.filter(f => f.id !== id));
   }
 
   return (
@@ -260,10 +272,8 @@ function FavoriteTab() {
                 <span style={{ color: "#22c55e", fontSize: 13, fontWeight: 600 }}>{f.title}</span>
                 <button onClick={() => sterge(f.id)} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13 }}>🗑️</button>
               </div>
-              <div style={{ color: "#94a3b8", fontSize: 11, marginBottom: 8 }}>{f.data}</div>
-              <div style={{ color: "#e2e8f0", fontSize: 13, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>
-                {f.content.slice(0, 300)}{f.content.length > 300 ? "..." : ""}
-              </div>
+              <div style={{ color: "#94a3b8", fontSize: 11, marginBottom: 8 }}>{new Date(f.created_at).toLocaleDateString("ro-RO")}</div>
+              <div style={{ color: "#e2e8f0", fontSize: 13, lineHeight: 1.6, maxHeight: 120, overflowY: "auto" }}>{f.content?.slice(0, 300)}{f.content?.length > 300 ? "..." : ""}</div>
             </div>
           ))}
         </div>
@@ -272,57 +282,54 @@ function FavoriteTab() {
   );
 }
 
-// ─── JURNAL TAB ──────────────────────────────────────────────────────────────
+// ─── JURNAL TAB ───────────────────────────────────────────────────────────────
 function JurnalTab() {
   const azi = new Date().toISOString().split("T")[0];
-  const [jurnal, setJurnal] = useState(() => loadLS("jurnal_nutritie", {}));
+  const [intrari, setIntrari] = useState([]);
   const [data, setData] = useState(azi);
   const [item, setItem] = useState("");
   const [calorii, setCalorii] = useState("");
+  const [userId, setUserId] = useState(null);
 
-  const intrariZi = jurnal[data] || [];
-  const totalCalorii = intrariZi.reduce((sum, i) => sum + (parseInt(i.calorii) || 0), 0);
+  useEffect(() => {
+    const uid = getUserId(); setUserId(uid);
+    getJurnal(uid, data).then(d => setIntrari(d || []));
+  }, [data]);
 
-  function adauga() {
+  async function adauga() {
     if (!item.trim()) return;
-    const noua = { id: Date.now(), item: item.trim(), calorii: parseInt(calorii) || 0, ora: new Date().toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" }) };
-    const updated = { ...jurnal, [data]: [...intrariZi, noua] };
-    setJurnal(updated);
-    saveLS("jurnal_nutritie", updated);
+    const ora = new Date().toLocaleTimeString("ro-RO", { hour: "2-digit", minute: "2-digit" });
+    const noua = { data, item: item.trim(), calorii: parseInt(calorii) || 0, ora };
+    const result = await addJurnal(userId, noua);
+    if (result && result[0]) setIntrari(prev => [...prev, result[0]]);
     setItem(""); setCalorii("");
   }
 
-  function sterge(id) {
-    const updated = { ...jurnal, [data]: intrariZi.filter(i => i.id !== id) };
-    setJurnal(updated);
-    saveLS("jurnal_nutritie", updated);
+  async function sterge(id) {
+    await deleteJurnal(userId, id);
+    setIntrari(prev => prev.filter(i => i.id !== id));
   }
+
+  const totalCalorii = intrari.reduce((sum, i) => sum + (parseInt(i.calorii) || 0), 0);
 
   return (
     <div style={{ padding: "0 20px", overflowY: "auto", flex: 1 }}>
       <div style={{ display: "flex", gap: 10, marginBottom: 16, alignItems: "center" }}>
-        <input type="date" value={data} onChange={e => setData(e.target.value)} style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, flex: 1 }} />
-        <div style={{ background: "#1a2a1a", border: "1px solid #2a4a2a", borderRadius: 10, padding: "8px 14px", color: "#22c55e", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>
-          {totalCalorii} kcal
-        </div>
+        <input type="date" value={data} onChange={e => setData(e.target.value)} style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, flex: 1, outline: "none" }} />
+        <div style={{ background: "#1a2a1a", border: "1px solid #2a4a2a", borderRadius: 10, padding: "8px 14px", color: "#22c55e", fontSize: 14, fontWeight: 700, flexShrink: 0 }}>{totalCalorii} kcal</div>
       </div>
-
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <input value={item} onChange={e => setItem(e.target.value)} placeholder="Ce ai mâncat?" style={{ flex: 2, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, outline: "none" }} onKeyDown={e => e.key === "Enter" && adauga()} />
         <input value={calorii} onChange={e => setCalorii(e.target.value)} placeholder="kcal" type="number" style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, outline: "none" }} onKeyDown={e => e.key === "Enter" && adauga()} />
         <button onClick={adauga} style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 10, color: "white", padding: "8px 14px", cursor: "pointer", fontSize: 16 }}>+</button>
       </div>
-
-      {intrariZi.length === 0 ? (
+      {intrari.length === 0 ? (
         <div style={{ textAlign: "center", color: "#4a5568", padding: "40px 0" }}>Nicio intrare pentru această zi.</div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingBottom: 20 }}>
-          {intrariZi.map(i => (
+          {intrari.map(i => (
             <div key={i.id} style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 12, padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div>
-                <div style={{ color: "#e2e8f0", fontSize: 14 }}>{i.item}</div>
-                <div style={{ color: "#4a5568", fontSize: 11 }}>{i.ora}</div>
-              </div>
+              <div><div style={{ color: "#e2e8f0", fontSize: 14 }}>{i.item}</div><div style={{ color: "#4a5568", fontSize: 11 }}>{i.ora}</div></div>
               <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                 <span style={{ color: "#22c55e", fontWeight: 700, fontSize: 14 }}>{i.calorii} kcal</span>
                 <button onClick={() => sterge(i.id)} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 13 }}>✕</button>
@@ -335,7 +342,7 @@ function JurnalTab() {
   );
 }
 
-// ─── SAPTAMANA TAB ───────────────────────────────────────────────────────────
+// ─── SAPTAMANA TAB ────────────────────────────────────────────────────────────
 function SaptamanaTab({ profil }) {
   const [plan, setPlan] = useState(() => loadLS("plan_saptamana", null));
   const [loading, setLoading] = useState(false);
@@ -346,10 +353,7 @@ function SaptamanaTab({ profil }) {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          profil,
-          messages: [{ role: "user", content: `Generează un plan alimentar complet pentru 7 zile (Luni-Duminică). Pentru fiecare zi include: Mic dejun, Prânz, Cină, Gustare. Respectă profilul meu: ${profil?.calorii || 1600} kcal/zi, fără gluten, low-carb. Format: Ziua X: Mic dejun: ... | Prânz: ... | Cină: ... | Gustare: ... | Total: ~X kcal` }],
-        }),
+        body: JSON.stringify({ profil, messages: [{ role: "user", content: `Generează un plan alimentar complet pentru 7 zile (Luni-Duminică). Pentru fiecare zi include: Mic dejun, Prânz, Cină, Gustare. Respectă profilul: ${profil?.calorii || 1600} kcal/zi, fără gluten, low-carb.` }] }),
       });
       const data = await res.json();
       setPlan(data.reply);
@@ -364,57 +368,54 @@ function SaptamanaTab({ profil }) {
         {loading ? "Se generează..." : "🔄 Generează plan nou"}
       </button>
       {plan ? (
-        <div style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 14, padding: "16px", color: "#e2e8f0", fontSize: 14, lineHeight: 1.8, whiteSpace: "pre-wrap", paddingBottom: 20 }}>
-          {plan}
-        </div>
+        <div style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 14, padding: "16px", color: "#e2e8f0", fontSize: 14, lineHeight: 1.8, whiteSpace: "pre-wrap", paddingBottom: 20 }}>{plan}</div>
       ) : (
-        <div style={{ textAlign: "center", color: "#4a5568", padding: "60px 0" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>📅</div>
-          <div>Apasă butonul pentru a genera planul săptămânii.</div>
-        </div>
+        <div style={{ textAlign: "center", color: "#4a5568", padding: "60px 0" }}><div style={{ fontSize: 40, marginBottom: 12 }}>📅</div><div>Apasă butonul pentru a genera planul săptămânii.</div></div>
       )}
     </div>
   );
 }
 
-// ─── PROGRES TAB ─────────────────────────────────────────────────────────────
+// ─── PROGRES TAB ──────────────────────────────────────────────────────────────
 function ProgresTab({ profil }) {
-  const [intrari, setIntrari] = useState(() => loadLS("progres_greutate", []));
+  const [intrari, setIntrari] = useState([]);
   const [greutate, setGreutate] = useState("");
   const [data, setData] = useState(new Date().toISOString().split("T")[0]);
+  const [userId, setUserId] = useState(null);
 
-  function adauga() {
+  useEffect(() => {
+    const uid = getUserId(); setUserId(uid);
+    getProgres(uid).then(d => setIntrari(d || []));
+  }, []);
+
+  async function adauga() {
     if (!greutate) return;
-    const noua = { id: Date.now(), data, greutate: parseFloat(greutate) };
-    const updated = [...intrari.filter(i => i.data !== data), noua].sort((a, b) => a.data.localeCompare(b.data));
-    setIntrari(updated);
-    saveLS("progres_greutate", updated);
+    await addProgres(userId, { data, greutate: parseFloat(greutate) });
+    const updated = await getProgres(userId);
+    setIntrari(updated || []);
     setGreutate("");
   }
 
-  function sterge(id) {
-    const updated = intrari.filter(i => i.id !== id);
-    setIntrari(updated);
-    saveLS("progres_greutate", updated);
+  async function sterge(id) {
+    await deleteProgres(userId, id);
+    setIntrari(prev => prev.filter(i => i.id !== id));
   }
 
   const ultima = intrari[intrari.length - 1];
   const prima = intrari[0];
   const diferenta = ultima && prima && intrari.length > 1 ? (ultima.greutate - prima.greutate).toFixed(1) : null;
+  const imcActual = ultima && profil?.inaltime ? (ultima.greutate / Math.pow(profil.inaltime / 100, 2)).toFixed(1) : null;
 
-  // Simple SVG chart
   function renderChart() {
     if (intrari.length < 2) return null;
     const w = 320, h = 120, pad = 20;
-    const vals = intrari.map(i => i.greutate);
-    const min = Math.min(...vals) - 1;
-    const max = Math.max(...vals) + 1;
+    const vals = intrari.map(i => parseFloat(i.greutate));
+    const min = Math.min(...vals) - 1, max = Math.max(...vals) + 1;
     const points = intrari.map((item, i) => {
       const x = pad + (i / (intrari.length - 1)) * (w - 2 * pad);
       const y = pad + ((max - item.greutate) / (max - min)) * (h - 2 * pad);
       return `${x},${y}`;
     }).join(" ");
-
     return (
       <svg width="100%" viewBox={`0 0 ${w} ${h}`} style={{ marginBottom: 16 }}>
         <polyline fill="none" stroke="#22c55e" strokeWidth="2" points={points} />
@@ -427,13 +428,8 @@ function ProgresTab({ profil }) {
     );
   }
 
-  // IMC
-  const imc = profil?.greutate && profil?.inaltime ? (profil.greutate / Math.pow(profil.inaltime / 100, 2)).toFixed(1) : null;
-  const imcActual = ultima && profil?.inaltime ? (ultima.greutate / Math.pow(profil.inaltime / 100, 2)).toFixed(1) : null;
-
   return (
     <div style={{ padding: "0 20px", overflowY: "auto", flex: 1 }}>
-      {/* Stats */}
       {diferenta !== null && (
         <div style={{ display: "flex", gap: 10, marginBottom: 16 }}>
           <div style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 12, padding: "12px", textAlign: "center" }}>
@@ -452,23 +448,14 @@ function ProgresTab({ profil }) {
           )}
         </div>
       )}
-
-      {/* Chart */}
       {renderChart()}
-
-      {/* Add entry */}
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <input type="date" value={data} onChange={e => setData(e.target.value)} style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, outline: "none" }} />
         <input value={greutate} onChange={e => setGreutate(e.target.value)} placeholder="kg" type="number" step="0.1" style={{ width: 80, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, outline: "none" }} />
         <button onClick={adauga} style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 10, color: "white", padding: "8px 14px", cursor: "pointer", fontSize: 16 }}>+</button>
       </div>
-
-      {/* Entries */}
       {intrari.length === 0 ? (
-        <div style={{ textAlign: "center", color: "#4a5568", padding: "40px 0" }}>
-          <div style={{ fontSize: 40, marginBottom: 12 }}>⚖️</div>
-          <div>Adaugă prima ta înregistrare de greutate.</div>
-        </div>
+        <div style={{ textAlign: "center", color: "#4a5568", padding: "40px 0" }}><div style={{ fontSize: 40, marginBottom: 12 }}>⚖️</div><div>Adaugă prima ta înregistrare de greutate.</div></div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingBottom: 20 }}>
           {[...intrari].reverse().map(i => (
@@ -486,7 +473,7 @@ function ProgresTab({ profil }) {
   );
 }
 
-// ─── REMINDER TAB ────────────────────────────────────────────────────────────
+// ─── REMINDER TAB ─────────────────────────────────────────────────────────────
 function ReminderTab() {
   const DEFAULT_REMINDERS = [
     { id: 1, label: "Mic dejun", ora: "08:00", activ: true },
@@ -495,15 +482,12 @@ function ReminderTab() {
     { id: 4, label: "Gustare după-amiază", ora: "16:00", activ: false },
     { id: 5, label: "Cină", ora: "19:00", activ: true },
     { id: 6, label: "Sport", ora: "17:30", activ: false },
-    { id: 7, label: "Hidratare", ora: "09:00", activ: false },
   ];
   const [reminders, setReminders] = useState(() => loadLS("remindere", DEFAULT_REMINDERS));
   const [permisiune, setPermisiune] = useState(null);
   const [nou, setNou] = useState({ label: "", ora: "12:00" });
 
-  useEffect(() => {
-    if ("Notification" in window) setPermisiune(Notification.permission);
-  }, []);
+  useEffect(() => { if ("Notification" in window) setPermisiune(Notification.permission); }, []);
 
   async function cerePermisiune() {
     if (!("Notification" in window)) { alert("Browserul tău nu suportă notificări."); return; }
@@ -513,63 +497,47 @@ function ReminderTab() {
 
   function toggleActiv(id) {
     const updated = reminders.map(r => r.id === id ? { ...r, activ: !r.activ } : r);
-    setReminders(updated);
-    saveLS("remindere", updated);
+    setReminders(updated); saveLS("remindere", updated);
   }
 
   function updateOra(id, ora) {
     const updated = reminders.map(r => r.id === id ? { ...r, ora } : r);
-    setReminders(updated);
-    saveLS("remindere", updated);
+    setReminders(updated); saveLS("remindere", updated);
   }
 
   function adaugaReminder() {
     if (!nou.label.trim()) return;
     const r = { id: Date.now(), label: nou.label.trim(), ora: nou.ora, activ: true };
     const updated = [...reminders, r];
-    setReminders(updated);
-    saveLS("remindere", updated);
+    setReminders(updated); saveLS("remindere", updated);
     setNou({ label: "", ora: "12:00" });
   }
 
   function stergeReminder(id) {
     const updated = reminders.filter(r => r.id !== id);
-    setReminders(updated);
-    saveLS("remindere", updated);
-  }
-
-  function testeazaNotificare() {
-    if (permisiune === "granted") {
-      new Notification("Agent Nutriție", { body: "Notificările funcționează! 🥗", icon: "/favicon.ico" });
-    }
+    setReminders(updated); saveLS("remindere", updated);
   }
 
   return (
     <div style={{ padding: "0 20px", overflowY: "auto", flex: 1 }}>
-      {/* Permisiune */}
       <div style={{ background: "#1a1f2e", border: `1px solid ${permisiune === "granted" ? "#2a4a2a" : "#4a3020"}`, borderRadius: 14, padding: "14px 16px", marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
             <div style={{ color: "#e2e8f0", fontSize: 14, fontWeight: 600 }}>Notificări browser</div>
-            <div style={{ color: "#4a5568", fontSize: 12, marginTop: 2 }}>
-              {permisiune === "granted" ? "✅ Active" : permisiune === "denied" ? "❌ Blocate în browser" : "⚠️ Neactivate"}
-            </div>
+            <div style={{ color: "#4a5568", fontSize: 12, marginTop: 2 }}>{permisiune === "granted" ? "✅ Active" : permisiune === "denied" ? "❌ Blocate" : "⚠️ Neactivate"}</div>
           </div>
           {permisiune !== "granted" && permisiune !== "denied" && (
             <button onClick={cerePermisiune} style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 10, color: "white", padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>Activează</button>
           )}
           {permisiune === "granted" && (
-            <button onClick={testeazaNotificare} style={{ background: "#1a2a1a", border: "1px solid #2a4a2a", borderRadius: 10, color: "#22c55e", padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>Testează</button>
+            <button onClick={() => new Notification("Agent Nutriție", { body: "Notificările funcționează! 🥗" })} style={{ background: "#1a2a1a", border: "1px solid #2a4a2a", borderRadius: 10, color: "#22c55e", padding: "8px 14px", cursor: "pointer", fontSize: 13 }}>Testează</button>
           )}
         </div>
-        {permisiune === "denied" && <div style={{ color: "#f97316", fontSize: 12, marginTop: 8 }}>Activează notificările din setările browserului pentru acest site.</div>}
       </div>
-
-      {/* Remindere */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 16 }}>
         {reminders.map(r => (
           <div key={r.id} style={{ background: "#1a1f2e", border: `1px solid ${r.activ ? "#2a4a2a" : "#2a3040"}`, borderRadius: 12, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
-            <button onClick={() => toggleActiv(r.id)} style={{ width: 36, height: 20, borderRadius: 10, background: r.activ ? "#22c55e" : "#2a3040", border: "none", cursor: "pointer", position: "relative", flexShrink: 0, transition: "background 0.2s" }}>
+            <button onClick={() => toggleActiv(r.id)} style={{ width: 36, height: 20, borderRadius: 10, background: r.activ ? "#22c55e" : "#2a3040", border: "none", cursor: "pointer", position: "relative", flexShrink: 0 }}>
               <div style={{ width: 16, height: 16, borderRadius: "50%", background: "white", position: "absolute", top: 2, left: r.activ ? 18 : 2, transition: "left 0.2s" }} />
             </button>
             <span style={{ flex: 1, color: r.activ ? "#e2e8f0" : "#4a5568", fontSize: 14 }}>{r.label}</span>
@@ -578,22 +546,17 @@ function ReminderTab() {
           </div>
         ))}
       </div>
-
-      {/* Adaugă reminder nou */}
       <div style={{ display: "flex", gap: 8, paddingBottom: 20 }}>
         <input value={nou.label} onChange={e => setNou(p => ({ ...p, label: e.target.value }))} placeholder="Nume reminder..." style={{ flex: 1, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, outline: "none" }} onKeyDown={e => e.key === "Enter" && adaugaReminder()} />
         <input type="time" value={nou.ora} onChange={e => setNou(p => ({ ...p, ora: e.target.value }))} style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 10, color: "#e2e8f0", padding: "8px 12px", fontSize: 14, outline: "none" }} />
         <button onClick={adaugaReminder} style={{ background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 10, color: "white", padding: "8px 14px", cursor: "pointer", fontSize: 16 }}>+</button>
       </div>
-
-      <div style={{ color: "#4a5568", fontSize: 12, textAlign: "center", paddingBottom: 20 }}>
-        💡 Notificările funcționează doar când browserul este deschis.
-      </div>
+      <div style={{ color: "#4a5568", fontSize: 12, textAlign: "center", paddingBottom: 20 }}>💡 Notificările funcționează doar când browserul este deschis.</div>
     </div>
   );
 }
 
-// ─── PRODUS TAB (scanare/foto produs) ────────────────────────────────────────
+// ─── PRODUS TAB ───────────────────────────────────────────────────────────────
 function ProdusTab({ profil }) {
   const [imagine, setImagine] = useState(null);
   const [preview, setPreview] = useState(null);
@@ -617,30 +580,14 @@ function ProdusTab({ profil }) {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          profil,
-          messages: [{
-            role: "user",
-            content: [
-              { type: "image", source: { type: "base64", media_type: imagine.type, data: imagine.data } },
-              { type: "text", text: `Analizează acest produs alimentar. Extrage:
-1. Numele produsului
-2. Valorile nutriționale per 100g și per porție (dacă sunt vizibile): calorii, proteine, grăsimi, carbohidrați, zahăr, fibre
-3. Lista de ingrediente (primele 5)
-4. Este potrivit pentru dieta mea (${profil?.restrictii || "fără gluten, low-carb"})?
-5. Recomandare: DA sau NU, cu motiv scurt.
-Dacă nu e o etichetă alimentară, descrie ce vezi și estimează valorile nutriționale.` }
-            ]
-          }],
-        }),
+        body: JSON.stringify({ profil, messages: [{ role: "user", content: [{ type: "image", source: { type: "base64", media_type: imagine.type, data: imagine.data } }, { type: "text", text: `Analizează acest produs. Extrage valorile nutriționale, ingredientele principale și spune dacă e potrivit pentru dieta mea (${profil?.restrictii || "fără gluten, low-carb"}). Recomandare: DA sau NU cu motiv scurt.` }] }] }),
       });
       const data = await res.json();
       setRezultat(data.reply);
       const item = { id: Date.now(), preview, rezultat: data.reply, data: new Date().toLocaleDateString("ro-RO") };
       const updated = [item, ...istoric].slice(0, 20);
-      setIstoric(updated);
-      saveLS("istoric_produse", updated);
-    } catch { setRezultat("Eroare la analiză. Încearcă din nou."); }
+      setIstoric(updated); saveLS("istoric_produse", updated);
+    } catch { setRezultat("Eroare. Încearcă din nou."); }
     finally { setLoading(false); }
   }
 
@@ -651,30 +598,21 @@ Dacă nu e o etichetă alimentară, descrie ce vezi și estimează valorile nutr
       {!preview ? (
         <div>
           <div style={{ display: "flex", gap: 10, marginBottom: 20 }}>
-            <button onClick={() => cameraRef.current?.click()} style={{ flex: 1, padding: "16px", background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 14, color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>
-              📷 Fotografiază produs
-            </button>
-            <button onClick={() => fileRef.current?.click()} style={{ flex: 1, padding: "16px", background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 14, color: "#94a3b8", fontSize: 14, cursor: "pointer" }}>
-              🖼️ Din galerie
-            </button>
+            <button onClick={() => cameraRef.current?.click()} style={{ flex: 1, padding: "16px", background: "linear-gradient(135deg, #16a34a, #22c55e)", border: "none", borderRadius: 14, color: "white", fontSize: 14, fontWeight: 700, cursor: "pointer" }}>📷 Fotografiază produs</button>
+            <button onClick={() => fileRef.current?.click()} style={{ flex: 1, padding: "16px", background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 14, color: "#94a3b8", fontSize: 14, cursor: "pointer" }}>🖼️ Din galerie</button>
           </div>
           <input ref={cameraRef} type="file" accept="image/*" capture="environment" onChange={handleFile} style={{ display: "none" }} />
           <input ref={fileRef} type="file" accept="image/*" onChange={handleFile} style={{ display: "none" }} />
-
-          <div style={{ color: "#4a5568", fontSize: 13, textAlign: "center", marginBottom: 20 }}>
-            Fotografiază eticheta unui produs din magazin sau codul de bare — agentul analizează ingredientele și îți spune dacă e potrivit pentru dieta ta.
-          </div>
-
-          {/* Istoric */}
+          <div style={{ color: "#4a5568", fontSize: 13, textAlign: "center", marginBottom: 20 }}>Fotografiază eticheta unui produs — agentul analizează ingredientele și îți spune dacă e potrivit pentru dieta ta.</div>
           {istoric.length > 0 && (
             <div>
-              <div style={{ color: "#94a3b8", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Produse analizate recent:</div>
+              <div style={{ color: "#94a3b8", fontSize: 13, fontWeight: 600, marginBottom: 10 }}>Analizate recent:</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 8, paddingBottom: 20 }}>
                 {istoric.slice(0, 5).map(item => (
                   <div key={item.id} style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 12, padding: "10px 14px", display: "flex", gap: 12, alignItems: "center" }}>
                     <img src={item.preview} alt="" style={{ width: 48, height: 48, borderRadius: 8, objectFit: "cover", flexShrink: 0 }} />
                     <div style={{ flex: 1, overflow: "hidden" }}>
-                      <div style={{ color: "#e2e8f0", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.rezultat.slice(0, 60)}...</div>
+                      <div style={{ color: "#e2e8f0", fontSize: 13, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.rezultat?.slice(0, 60)}...</div>
                       <div style={{ color: "#4a5568", fontSize: 11, marginTop: 2 }}>{item.data}</div>
                     </div>
                   </div>
@@ -691,20 +629,16 @@ Dacă nu e o etichetă alimentară, descrie ce vezi și estimează valorile nutr
               {loading ? "Se analizează..." : "🔍 Analizează produsul"}
             </button>
           ) : (
-            <div style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 14, padding: "16px", color: "#e2e8f0", fontSize: 14, lineHeight: 1.7, marginBottom: 10, whiteSpace: "pre-wrap" }}>
-              {rezultat}
-            </div>
+            <div style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 14, padding: "16px", color: "#e2e8f0", fontSize: 14, lineHeight: 1.7, marginBottom: 10, whiteSpace: "pre-wrap" }}>{rezultat}</div>
           )}
-          <button onClick={reset} style={{ width: "100%", padding: "10px", background: "transparent", border: "1px solid #2a3040", borderRadius: 12, color: "#94a3b8", fontSize: 14, cursor: "pointer" }}>
-            ← Analizează alt produs
-          </button>
+          <button onClick={reset} style={{ width: "100%", padding: "10px", background: "transparent", border: "1px solid #2a3040", borderRadius: 12, color: "#94a3b8", fontSize: 14, cursor: "pointer" }}>← Analizează alt produs</button>
         </div>
       )}
     </div>
   );
 }
 
-// ─── MAIN ────────────────────────────────────────────────────────────────────
+// ─── MAIN ─────────────────────────────────────────────────────────────────────
 export default function Home() {
   const router = useRouter();
   const [tab, setTab] = useState(0);
@@ -718,7 +652,6 @@ export default function Home() {
   return (
     <div style={{ fontFamily: "'Inter', system-ui, sans-serif", background: "#0f1117", minHeight: "100vh", display: "flex", flexDirection: "column", alignItems: "center" }}>
       <div style={{ width: "100%", maxWidth: 680, display: "flex", flexDirection: "column", height: "100vh" }}>
-        {/* Header */}
         <div style={{ padding: "16px 20px 0" }}>
           <div style={{ background: "linear-gradient(135deg, #1a2a1a, #0f1f0f)", border: "1px solid #2a4a2a", borderRadius: 16, padding: "12px 16px", display: "flex", alignItems: "center", gap: 12, marginBottom: 12 }}>
             <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #22c55e, #16a34a)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, flexShrink: 0 }}>🥦</div>
@@ -730,8 +663,6 @@ export default function Home() {
               {profil ? "👤 Profil" : "⚙️ Setează"}
             </button>
           </div>
-
-          {/* Tabs */}
           <div style={{ display: "flex", gap: 4, overflowX: "auto", paddingBottom: 4 }}>
             {TABS.map((t, i) => (
               <button key={i} onClick={() => setTab(i)} style={{ background: i === tab ? "linear-gradient(135deg, #16a34a, #22c55e)" : "#1a1f2e", border: `1px solid ${i === tab ? "transparent" : "#2a3040"}`, borderRadius: 20, color: i === tab ? "white" : "#94a3b8", padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: i === tab ? 700 : 400, flexShrink: 0, whiteSpace: "nowrap" }}>
@@ -740,8 +671,6 @@ export default function Home() {
             ))}
           </div>
         </div>
-
-        {/* Tab content */}
         <div style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", paddingTop: 12 }}>
           {tab === 0 && <ChatTab profil={profil} />}
           {tab === 1 && <FavoriteTab />}
@@ -752,12 +681,11 @@ export default function Home() {
           {tab === 6 && <ProdusTab profil={profil} />}
         </div>
       </div>
-
       <style>{`
         @keyframes bounce { 0%, 60%, 100% { transform: translateY(0); } 30% { transform: translateY(-6px); } }
         * { box-sizing: border-box; }
         ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #2a3040; border-radius: 2px; }
-        input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(1); }
+        input[type="date"]::-webkit-calendar-picker-indicator, input[type="time"]::-webkit-calendar-picker-indicator { filter: invert(1); }
       `}</style>
     </div>
   );
