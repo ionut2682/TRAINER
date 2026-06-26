@@ -15,13 +15,16 @@ export default function Home() {
   const [messages, setMessages] = useState([
     {
       role: "assistant",
-      content: "Salut! Sunt agentul tău personal de nutriție și sport.\n\nPot să:\n• 🥗 Generez rețete din ingredientele tale\n• 📅 Planific mesele pentru o zi întreagă\n• 📊 Calculez macro-urile oricărui preparat\n• 🏋️ Îți dau un plan sport adaptat obiectivelor tale\n\nMergi la Profil (sus dreapta) pentru a-mi da informațiile tale personale!\n\nCu ce te ajut azi?",
+      content: "Salut! Sunt agentul tău personal de nutriție și sport.\n\nPot să:\n• 🥗 Generez rețete din ingredientele tale\n• 📅 Planific mesele pentru o zi întreagă\n• 📊 Calculez macro-urile oricărui preparat\n• 🏋️ Îți dau un plan sport adaptat obiectivelor tale\n• 📷 Analizez poze cu mâncare, frigider sau etichete\n\nCu ce te ajut azi?",
     },
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [profil, setProfil] = useState(null);
+  const [imagine, setImagine] = useState(null); // base64
+  const [imaginePreview, setImaginePreview] = useState(null);
   const bottomRef = useRef(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     const saved = localStorage.getItem("profil_nutritie");
@@ -32,20 +35,70 @@ export default function Home() {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, loading]);
 
+  function handleImagine(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const base64 = reader.result.split(",")[1];
+      setImagine({ data: base64, type: file.type });
+      setImaginePreview(reader.result);
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function stergeImagine() {
+    setImagine(null);
+    setImaginePreview(null);
+    if (fileRef.current) fileRef.current.value = "";
+  }
+
   async function sendMessage(text) {
     const userText = text || input.trim();
-    if (!userText || loading) return;
+    if ((!userText && !imagine) || loading) return;
     setInput("");
 
-    const newMessages = [...messages, { role: "user", content: userText }];
+    // Build user message for display
+    const displayMsg = {
+      role: "user",
+      content: userText || "📷 Am trimis o poză",
+      imagine: imaginePreview,
+    };
+
+    // Build API message
+    let apiContent = [];
+    if (imagine) {
+      apiContent.push({
+        type: "image",
+        source: { type: "base64", media_type: imagine.type, data: imagine.data },
+      });
+    }
+    if (userText) {
+      apiContent.push({ type: "text", text: userText });
+    } else if (imagine) {
+      apiContent.push({ type: "text", text: "Analizează această imagine în contextul nutriției și obiectivelor mele. Dacă e mâncare, estimează caloriile și macro-urile. Dacă e frigider, sugerează o rețetă. Dacă e etichetă, citește valorile nutriționale." });
+    }
+
+    const newMessages = [...messages, displayMsg];
     setMessages(newMessages);
+    setImagine(null);
+    setImaginePreview(null);
+    if (fileRef.current) fileRef.current.value = "";
     setLoading(true);
+
+    // Build API messages without imagine preview field
+    const apiMessages = newMessages.map((m) => ({
+      role: m.role,
+      content: m.role === "user" && m === displayMsg
+        ? apiContent
+        : m.content,
+    }));
 
     try {
       const res = await fetch("/api/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: newMessages, profil }),
+        body: JSON.stringify({ messages: apiMessages, profil }),
       });
       const data = await res.json();
       setMessages([...newMessages, { role: "assistant", content: data.reply }]);
@@ -83,10 +136,7 @@ export default function Home() {
               {profil?.nume ? `${profil.nume} · ${profil.calorii || 1600} kcal` : "Completează profilul pentru personalizare"}
             </div>
           </div>
-          <button
-            onClick={() => router.push("/profil")}
-            style={{ background: profil ? "#1a2a1a" : "linear-gradient(135deg, #16a34a, #22c55e)", border: profil ? "1px solid #2a4a2a" : "none", borderRadius: 10, color: profil ? "#22c55e" : "white", padding: "7px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}
-          >
+          <button onClick={() => router.push("/profil")} style={{ background: profil ? "#1a2a1a" : "linear-gradient(135deg, #16a34a, #22c55e)", border: profil ? "1px solid #2a4a2a" : "none", borderRadius: 10, color: profil ? "#22c55e" : "white", padding: "7px 14px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>
             {profil ? "👤 Profil" : "⚙️ Setează Profil"}
           </button>
         </div>
@@ -97,6 +147,9 @@ export default function Home() {
         {messages.map((msg, i) => (
           <div key={i} style={{ display: "flex", justifyContent: msg.role === "user" ? "flex-end" : "flex-start" }}>
             <div style={{ maxWidth: "82%", padding: "12px 16px", borderRadius: msg.role === "user" ? "18px 18px 4px 18px" : "18px 18px 18px 4px", background: msg.role === "user" ? "linear-gradient(135deg, #16a34a, #22c55e)" : "#1a1f2e", border: msg.role === "assistant" ? "1px solid #2a3040" : "none", color: msg.role === "user" ? "#fff" : "#e2e8f0", fontSize: 14, lineHeight: 1.6 }}>
+              {msg.imagine && (
+                <img src={msg.imagine} alt="uploaded" style={{ width: "100%", borderRadius: 8, marginBottom: 8, maxHeight: 200, objectFit: "cover" }} />
+              )}
               {formatMessage(msg.content)}
             </div>
           </div>
@@ -122,20 +175,39 @@ export default function Home() {
         </div>
       )}
 
+      {/* Image preview */}
+      {imaginePreview && (
+        <div style={{ width: "100%", maxWidth: 680, padding: "0 20px" }}>
+          <div style={{ position: "relative", display: "inline-block" }}>
+            <img src={imaginePreview} alt="preview" style={{ height: 80, borderRadius: 10, border: "2px solid #22c55e" }} />
+            <button onClick={stergeImagine} style={{ position: "absolute", top: -8, right: -8, width: 22, height: 22, borderRadius: "50%", background: "#ef4444", border: "none", color: "white", fontSize: 12, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+          </div>
+        </div>
+      )}
+
       {/* Input */}
       <div style={{ width: "100%", maxWidth: 680, padding: "12px 20px 24px" }}>
-        <div style={{ display: "flex", gap: 10, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 16, padding: "8px 8px 8px 16px" }}>
+        <div style={{ display: "flex", gap: 10, background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 16, padding: "8px 8px 8px 12px", alignItems: "flex-end" }}>
+          {/* Camera button */}
+          <button onClick={() => fileRef.current?.click()} style={{ width: 36, height: 36, borderRadius: 8, background: "#2a3040", border: "none", cursor: "pointer", fontSize: 16, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+            📷
+          </button>
+          <input ref={fileRef} type="file" accept="image/*" onChange={handleImagine} style={{ display: "none" }} />
+
           <textarea
             value={input}
             onChange={e => setInput(e.target.value)}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage(); } }}
-            placeholder="Ce ingrediente ai? Plan sport? Macro-uri?"
+            placeholder="Scrie sau trimite o poză..."
             rows={1}
             style={{ flex: 1, background: "transparent", border: "none", outline: "none", color: "#e2e8f0", fontSize: 14, resize: "none", lineHeight: 1.5, paddingTop: 6, fontFamily: "inherit" }}
           />
-          <button onClick={() => sendMessage()} disabled={!input.trim() || loading} style={{ width: 40, height: 40, borderRadius: 10, background: input.trim() && !loading ? "linear-gradient(135deg, #16a34a, #22c55e)" : "#2a3040", border: "none", cursor: input.trim() && !loading ? "pointer" : "default", fontSize: 18, color: "white" }}>
+          <button onClick={() => sendMessage()} disabled={(!input.trim() && !imagine) || loading} style={{ width: 36, height: 36, borderRadius: 10, background: (input.trim() || imagine) && !loading ? "linear-gradient(135deg, #16a34a, #22c55e)" : "#2a3040", border: "none", cursor: (input.trim() || imagine) && !loading ? "pointer" : "default", fontSize: 18, color: "white", flexShrink: 0 }}>
             ↑
           </button>
+        </div>
+        <div style={{ textAlign: "center", color: "#4a5568", fontSize: 11, marginTop: 6 }}>
+          📷 Poți trimite poze cu frigiderul, mâncare sau etichete nutriționale
         </div>
       </div>
 
