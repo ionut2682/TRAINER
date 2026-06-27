@@ -14,10 +14,10 @@ async function sb(path, method = "GET", body = null) {
   if (body) opts.body = JSON.stringify(body);
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, opts);
-    if (!res.ok) { console.error("Supabase error:", await res.text()); return null; }
+    if (!res.ok) { console.error("SB error:", await res.text()); return null; }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
-  } catch (e) { console.error("Supabase fetch error:", e); return null; }
+  } catch (e) { console.error("SB fetch:", e); return null; }
 }
 
 export function getUserId() {
@@ -29,12 +29,11 @@ export function getUserId() {
 
 // CHAT SESSIONS
 export async function getSessions(userId) {
-  const data = await sb(`chat_sessions?user_id=eq.${userId}&order=updated_at.desc&limit=20`);
-  return data || [];
+  return await sb(`chat_sessions?user_id=eq.${userId}&order=updated_at.desc&limit=20`) || [];
 }
 export async function saveSession(userId, session) {
   const existing = await sb(`chat_sessions?user_id=eq.${userId}&id=eq.${session.id}`);
-  if (existing && existing.length > 0) {
+  if (existing?.length > 0) {
     await sb(`chat_sessions?user_id=eq.${userId}&id=eq.${session.id}`, "PATCH", { messages: session.messages, title: session.title, updated_at: new Date().toISOString() });
   } else {
     await sb("chat_sessions", "POST", { id: session.id, user_id: userId, title: session.title, messages: session.messages });
@@ -44,41 +43,56 @@ export async function deleteSession(userId, sessionId) {
   await sb(`chat_sessions?user_id=eq.${userId}&id=eq.${sessionId}`, "DELETE");
 }
 
-// MEMORY - rezumate conversatii pentru memorie pe termen lung
+// MEMORY
 export async function getMemory(userId) {
-  const data = await sb(`memory?user_id=eq.${userId}&order=created_at.desc&limit=50`);
-  return data || [];
+  return await sb(`memory?user_id=eq.${userId}&order=created_at.desc&limit=50`) || [];
 }
-export async function addMemory(userId, content) {
-  return await sb("memory", "POST", { user_id: userId, content });
+export async function addMemory(userId, content, tip = "conversatie") {
+  return await sb("memory", "POST", { user_id: userId, content, tip });
 }
-export async function deleteAllMemory(userId) {
-  await sb(`memory?user_id=eq.${userId}`, "DELETE");
-}
-
-// FAVORITE
-export async function getFavorite(userId) {
-  const data = await sb(`favorite?user_id=eq.${userId}&order=created_at.desc`);
-  return data || [];
-}
-export async function addFavorit(userId, item) {
-  return await sb("favorite", "POST", { user_id: userId, title: item.title, content: item.content });
-}
-export async function deleteFavorit(userId, id) {
-  await sb(`favorite?user_id=eq.${userId}&id=eq.${id}`, "DELETE");
+export async function markMemoryRezolvat(userId, id) {
+  await sb(`memory?user_id=eq.${userId}&id=eq.${id}`, "PATCH", { rezolvat: true });
 }
 
 // JURNAL
 export async function getJurnal(userId, data) {
-  const result = await sb(`jurnal?user_id=eq.${userId}&data=eq.${data}&order=created_at.asc`);
-  return result || [];
+  return await sb(`jurnal?user_id=eq.${userId}&data=eq.${data}&order=created_at.asc`) || [];
 }
 export async function getJurnalRecent(userId) {
-  const result = await sb(`jurnal?user_id=eq.${userId}&order=created_at.desc&limit=20`);
-  return result || [];
+  return await sb(`jurnal?user_id=eq.${userId}&order=created_at.desc&limit=30`) || [];
+}
+export async function getJurnalStats(userId) {
+  const all = await sb(`jurnal?user_id=eq.${userId}&order=data.asc`) || [];
+  if (!all.length) return null;
+  // Zile unice cu jurnal
+  const zileUnice = [...new Set(all.map(j => j.data))];
+  // Calcul medii
+  const totalCalorii = all.reduce((s, j) => s + (parseFloat(j.calorii) || 0), 0);
+  const totalSare = all.reduce((s, j) => s + (parseFloat(j.sare) || 0), 0);
+  // Zile in target (presupunem target din profil = 1600, dar nu avem acces la profil here)
+  return {
+    zileCuJurnal: zileUnice.length,
+    totalMese: all.length,
+    medieCalorii: zileUnice.length ? Math.round(totalCalorii / zileUnice.length) : 0,
+    medieSare: all.length ? (totalSare / all.length).toFixed(1) : 0,
+  };
 }
 export async function addJurnal(userId, item) {
-  return await sb("jurnal", "POST", { user_id: userId, data: item.data, item: item.item, calorii: item.calorii || 0, ora: item.ora, analiza: item.analiza || null });
+  return await sb("jurnal", "POST", {
+    user_id: userId,
+    data: item.data,
+    item: item.item,
+    calorii: item.calorii || 0,
+    proteine: item.proteine || 0,
+    carbohidrati: item.carbohidrati || 0,
+    zaharuri: item.zaharuri || 0,
+    grasimi: item.grasimi || 0,
+    sare: item.sare || 0,
+    apa_recomandata: item.apa_recomandata || 0,
+    tip_masa: item.tip_masa || "intermediar",
+    ora_masa: item.ora_masa || null,
+    analiza: item.analiza || null,
+  });
 }
 export async function deleteJurnal(userId, id) {
   await sb(`jurnal?user_id=eq.${userId}&id=eq.${id}`, "DELETE");
@@ -86,13 +100,12 @@ export async function deleteJurnal(userId, id) {
 
 // PROGRES
 export async function getProgres(userId) {
-  const data = await sb(`progres?user_id=eq.${userId}&order=data.asc`);
-  return data || [];
+  return await sb(`progres?user_id=eq.${userId}&order=data.asc`) || [];
 }
 export async function addProgres(userId, item) {
   const existing = await sb(`progres?user_id=eq.${userId}&data=eq.${item.data}`);
-  if (existing && existing.length > 0) {
-    await sb(`progres?user_id=eq.${userId}&data=eq.${item.data}`, "PATCH", { greutate: item.greutate, abdomen: item.abdomen, updated_at: new Date().toISOString() });
+  if (existing?.length > 0) {
+    await sb(`progres?user_id=eq.${userId}&data=eq.${item.data}`, "PATCH", { greutate: item.greutate, abdomen: item.abdomen });
   } else {
     await sb("progres", "POST", { user_id: userId, data: item.data, greutate: item.greutate, abdomen: item.abdomen });
   }
@@ -104,21 +117,31 @@ export async function deleteProgres(userId, id) {
 // PROFIL
 export async function getProfil(userId) {
   const data = await sb(`profil?user_id=eq.${userId}`);
-  return data && data.length > 0 ? data[0].date : null;
+  return data?.length > 0 ? data[0].date : null;
 }
 export async function saveProfil(userId, date) {
   const existing = await sb(`profil?user_id=eq.${userId}`);
-  if (existing && existing.length > 0) {
+  if (existing?.length > 0) {
     await sb(`profil?user_id=eq.${userId}`, "PATCH", { date, updated_at: new Date().toISOString() });
   } else {
     await sb("profil", "POST", { user_id: userId, date });
   }
 }
 
+// FAVORITE
+export async function getFavorite(userId) {
+  return await sb(`favorite?user_id=eq.${userId}&order=created_at.desc`) || [];
+}
+export async function addFavorit(userId, item) {
+  return await sb("favorite", "POST", { user_id: userId, title: item.title, content: item.content });
+}
+export async function deleteFavorit(userId, id) {
+  await sb(`favorite?user_id=eq.${userId}&id=eq.${id}`, "DELETE");
+}
+
 // RETETE PROPRII
 export async function getRetete(userId) {
-  const data = await sb(`retete_proprii?user_id=eq.${userId}&order=created_at.desc`);
-  return data || [];
+  return await sb(`retete_proprii?user_id=eq.${userId}&order=created_at.desc`) || [];
 }
 export async function addReteta(userId, item) {
   return await sb("retete_proprii", "POST", { user_id: userId, nume: item.nume, continut: item.continut, tip: item.tip });
