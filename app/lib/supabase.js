@@ -98,3 +98,15 @@ export async function saveProfil(userId, date) {
     await sb("profil", "POST", { user_id: userId, date });
   }
 }
+
+// RETETE PROPRII
+export async function getRetete(userId) {
+  const data = await sb(`retete_proprii?user_id=eq.${userId}&order=created_at.desc`);
+  return data || [];
+}
+export async function addReteta(userId, item) {
+  return await sb("retete_proprii", "POST", { user_id: userId, nume: item.nume, continut: item.continut, tip: item.tip });
+}
+export async function deleteReteta(userId, id) {
+  await sb(`retete_proprii?user_id=eq.${userId}&id=eq.${id}`, "DELETE");
+}
