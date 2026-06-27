@@ -1,5 +1,5 @@
 export async function POST(req) {
-  const { messages, profil } = await req.json();
+  const { messages, profil, tip } = await req.json();
 
   const profilText = profil ? `
 PROFILUL UTILIZATORULUI:
@@ -16,33 +16,98 @@ PROFILUL UTILIZATORULUI:
 - Echipament sport disponibil: ${profil.echipament || "acasă, fără echipament"}
 - Timp disponibil sport: ${profil.timpSport || "30 minute/zi"}
 - Alte informații: ${profil.altele || ""}
-` : `
-PROFILUL UTILIZATORULUI:
-- Nume: Marius
-- Obiectiv: scăderea circumferinței abdomenului cu 8 cm
-- Tratamente: criolipoliză 3 ședințe la interval de o lună
-- Calorii: ~1600 kcal/zi
-- Dietă: fără gluten, fără carbohidrați rafinați, low-carb
-`;
+` : `Utilizator cu dietă low-carb, fără gluten, ~1600 kcal/zi.`;
 
-  const systemPrompt = `Ești un agent personal de nutriție și sport.
+  let systemPrompt = "";
 
+  if (tip === "jurnal") {
+    systemPrompt = `Ești un expert în nutriție. Utilizatorul îți descrie ce a mâncat.
+${profilText}
+
+Calculează pentru FIECARE aliment menționat:
+- Caloriile (kcal)
+- Proteinele (g)
+- Carbohidrații (g)
+- Zahărul (g)
+- Grăsimile (g)
+
+Reguli importante:
+- Dacă utilizatorul spune "2 ouă" fără gramaj, folosește 60g per ou ca referință
+- Dacă spune "un măr", folosește 180g ca referință
+- Dacă spune "o pară", folosește 170g
+- Dacă menționează un produs specific (ex: "salată Savoria de la Mega"), caută valorile exacte de pe etichetă
+- Dacă spune "o felie de pâine", folosește 30g
+- Pentru produse de marcă, folosește valorile nutriționale reale ale acelui produs
+
+Format răspuns OBLIGATORIU:
+Pentru fiecare aliment: **Nume (cantitate):** X kcal | P: Xg | C: Xg | Z: Xg | G: Xg
+
+La final:
+📊 **TOTAL:**
+- **Calorii: ~X kcal**
+- **Proteine: ~X g**
+- **Carbohidrați: ~X g**
+- **Zahăr: ~X g**
+- **Grăsimi: ~X g**
+
+Adaugă un comentariu scurt despre cum se încadrează în targetul zilnic de ${profil?.calorii || 1600} kcal.
+Răspunde în română.`;
+  } else if (tip === "plan") {
+    systemPrompt = `Ești un expert în nutriție și gătit. Generezi planuri alimentare COMPLETE și DETALIATE.
+${profilText}
+
+Când generezi un plan alimentar:
+- Include REȚETE COMPLETE cu ingrediente exacte în grame
+- Pași de preparare detaliați, ca pentru un începător absolut în bucătărie
+- Timpi de gătire exacti
+- Sfaturi practice (ex: "usucă somonul cu hârtie de bucătărie înainte de a-l pune în tigaie")
+- Tabel nutrițional per porție (kcal, proteine, carbohidrați, zahăr, grăsimi)
+- Respectă STRICT restricțiile: ${profil?.restrictii || "fără gluten, low-carb"}
+- Total calorii zilnice: ${profil?.calorii || 1600} kcal
+
+Răspunde în română, cu format clar și detaliat.`;
+  } else if (tip === "sfat") {
+    systemPrompt = `Ești un expert personal în nutriție, fitness și sănătate. Dai sfaturi CONCRETE, BAZATE PE ȘTIINȚĂ, nu generale.
+${profilText}
+
+Când dai sfaturi:
+- Fii specific și practic, nu generic
+- Bazează-te pe studii și date reale
+- Adaptează sfaturile la profilul utilizatorului (criolipoliză, obiectiv abdomen, etc.)
+- Dacă e vorba de subțierea abdomenului, menționează: deficit caloric, exerciții specifice, rolul criolipolizei, hidratare, somn
+- Dă exemple concrete cu cifre când e posibil
+- Nu spune "consultați un medic" ca răspuns principal — dă sfatul concret și menționează medicul ca precauție
+
+Răspunde în română, clar și detaliat.`;
+  } else {
+    systemPrompt = `Ești un agent personal de nutriție și sport pentru ${profil?.nume || "Marius"}.
 ${profilText}
 
 Poți face:
-1. REȚETĂ - generezi rețete din ingrediente disponibile, adaptate profilului
-2. PLAN ZI - plan complet de mese pentru o zi (mic dejun, prânz, cină, gustări)
-3. MACRO-URI - calculezi proteine/grăsimi/carbohidrați/calorii
-4. PLAN SPORT - exerciții ușoare/moderate adaptate obiectivului de slăbire abdominală
-5. SFATURI - sfaturi personalizate bazate pe obiectivele și tratamentele utilizatorului
+1. REȚETĂ - generezi rețete complete cu gramaje și pași detaliați pentru novici
+2. PLAN ZI - plan complet de mese cu rețete detaliate
+3. MACRO-URI - calculezi valorile nutriționale
+4. PLAN SPORT - exerciții adaptate obiectivului
+5. SFATURI - sfaturi concrete bazate pe știință
 
-Format răspuns:
-- Include mereu tabelul de macro-uri când dai rețete (Proteine | Grăsimi | Carbohidrați | Calorii)
-- Pași numerotați clari
-- Cantități în grame
-- Limbă română
-- Răspunsuri concise și practice
-- Când dai plan sport, menționează că exercițiile abdominale ajută circulația după criolipoliză`;
+Format rețete:
+- Ingrediente cu gramaje exacte
+- Pași numerotați, detaliați pentru un începător
+- Timpi de gătire
+- Tabel nutrițional (kcal | Proteine | Carbohidrați | Zahăr | Grăsimi)
+
+Răspunde în română.`;
+  }
+
+  const tools = tip === "jurnal" ? [{ type: "web_search_20250305", name: "web_search" }] : undefined;
+
+  const body = {
+    model: "claude-sonnet-4-6",
+    max_tokens: 2000,
+    system: systemPrompt,
+    messages,
+  };
+  if (tools) body.tools = tools;
 
   const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -50,16 +115,12 @@ Format răspuns:
       "Content-Type": "application/json",
       "x-api-key": process.env.ANTHROPIC_API_KEY,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "web-search-2025-03-05",
     },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-6",
-      max_tokens: 1000,
-      system: systemPrompt,
-      messages,
-    }),
+    body: JSON.stringify(body),
   });
 
   const data = await response.json();
-  const text = data.content?.map((b) => b.text || "").join("") || "Eroare.";
+  const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "Eroare.";
   return Response.json({ reply: text });
 }
