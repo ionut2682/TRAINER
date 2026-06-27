@@ -14,10 +14,10 @@ async function sb(path, method = "GET", body = null) {
   if (body) opts.body = JSON.stringify(body);
   try {
     const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, opts);
-    if (!res.ok) return null;
+    if (!res.ok) { console.error("Supabase error:", await res.text()); return null; }
     const text = await res.text();
     return text ? JSON.parse(text) : null;
-  } catch { return null; }
+  } catch (e) { console.error("Supabase fetch error:", e); return null; }
 }
 
 export function getUserId() {
@@ -29,7 +29,7 @@ export function getUserId() {
 
 // CHAT SESSIONS
 export async function getSessions(userId) {
-  const data = await sb(`chat_sessions?user_id=eq.${userId}&order=updated_at.desc`);
+  const data = await sb(`chat_sessions?user_id=eq.${userId}&order=updated_at.desc&limit=20`);
   return data || [];
 }
 export async function saveSession(userId, session) {
@@ -42,6 +42,18 @@ export async function saveSession(userId, session) {
 }
 export async function deleteSession(userId, sessionId) {
   await sb(`chat_sessions?user_id=eq.${userId}&id=eq.${sessionId}`, "DELETE");
+}
+
+// MEMORY - rezumate conversatii pentru memorie pe termen lung
+export async function getMemory(userId) {
+  const data = await sb(`memory?user_id=eq.${userId}&order=created_at.desc&limit=50`);
+  return data || [];
+}
+export async function addMemory(userId, content) {
+  return await sb("memory", "POST", { user_id: userId, content });
+}
+export async function deleteAllMemory(userId) {
+  await sb(`memory?user_id=eq.${userId}`, "DELETE");
 }
 
 // FAVORITE
@@ -61,8 +73,12 @@ export async function getJurnal(userId, data) {
   const result = await sb(`jurnal?user_id=eq.${userId}&data=eq.${data}&order=created_at.asc`);
   return result || [];
 }
+export async function getJurnalRecent(userId) {
+  const result = await sb(`jurnal?user_id=eq.${userId}&order=created_at.desc&limit=20`);
+  return result || [];
+}
 export async function addJurnal(userId, item) {
-  return await sb("jurnal", "POST", { user_id: userId, data: item.data, item: item.item, calorii: item.calorii, ora: item.ora });
+  return await sb("jurnal", "POST", { user_id: userId, data: item.data, item: item.item, calorii: item.calorii || 0, ora: item.ora, analiza: item.analiza || null });
 }
 export async function deleteJurnal(userId, id) {
   await sb(`jurnal?user_id=eq.${userId}&id=eq.${id}`, "DELETE");
@@ -76,9 +92,9 @@ export async function getProgres(userId) {
 export async function addProgres(userId, item) {
   const existing = await sb(`progres?user_id=eq.${userId}&data=eq.${item.data}`);
   if (existing && existing.length > 0) {
-    await sb(`progres?user_id=eq.${userId}&data=eq.${item.data}`, "PATCH", { greutate: item.greutate });
+    await sb(`progres?user_id=eq.${userId}&data=eq.${item.data}`, "PATCH", { greutate: item.greutate, abdomen: item.abdomen, updated_at: new Date().toISOString() });
   } else {
-    await sb("progres", "POST", { user_id: userId, data: item.data, greutate: item.greutate });
+    await sb("progres", "POST", { user_id: userId, data: item.data, greutate: item.greutate, abdomen: item.abdomen });
   }
 }
 export async function deleteProgres(userId, id) {
