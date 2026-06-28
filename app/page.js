@@ -805,32 +805,48 @@ function ReteteTab({ profil }) {
   async function upload(e) {
     const f=e.target.files[0]; if(!f) return;
     setLoading(true);
-    const r=new FileReader();
-    r.onload=async()=>{
-      try {
-        const b64=r.result.split(",")[1];
-        // Gemini accepta inline_data pentru PDF
-        const isPdf = f.type.includes("pdf");
-        let content;
-        if(isPdf) {
-          content = [
-            { inline_data: { mime_type: "application/pdf", data: b64 } },
-            { text: "Extrage TOATE rețetele din acest document. Pentru fiecare rețetă: **Nume rețetă** bold, ingrediente cu gramaje exacte, pași detaliați de preparare, valori nutriționale dacă există. Separă rețetele clar cu linie orizontală." }
-          ];
-        } else {
-          // Pentru Word/txt - citim ca text
-          const text = atob(b64);
-          content = `Extrage TOATE rețetele din acest document:\n\n${text.slice(0,30000)}\n\nPentru fiecare rețetă: **Nume** bold, ingrediente cu gramaje, pași detaliați, valori nutriționale. Separă rețetele clar.`;
-        }
-        const reply = await callAPI([{role:"user",content}], profil, undefined, {});
-        const result = await addReteta(userId,{nume:f.name.replace(/\.[^/.]+$/,""),continut:reply,tip:f.type});
-        console.log("addReteta result:",result);
-        await reload(userId);
-        alert("✅ Rețetele salvate în cloud!");
-      } catch(e){ console.error(e); alert("Eroare: "+e.message); }
-      finally{ setLoading(false); if(fRef.current)fRef.current.value=""; }
-    };
-    r.readAsDataURL(f);
+    try {
+      const isPdf = f.type.includes("pdf");
+      const isDocx = f.name.toLowerCase().endsWith(".docx") || f.type.includes("word");
+      const isTxt = f.type.includes("text") || f.name.toLowerCase().endsWith(".txt");
+
+      let reply = "";
+
+      if(isPdf) {
+        // PDF - trimite ca inline_data la Gemini
+        const b64 = await new Promise((res) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result.split(",")[1]);
+          r.readAsDataURL(f);
+        });
+        const content = [
+          { inline_data: { mime_type: "application/pdf", data: b64 } },
+          { text: "Extrage TOATE rețetele din acest document. Pentru fiecare rețetă: **Nume rețetă** bold, ingrediente cu gramaje exacte, pași detaliați de preparare, valori nutriționale dacă există. Separă rețetele clar. Răspunde în română." }
+        ];
+        reply = await callAPI([{role:"user",content}], profil, undefined, {});
+      } else if(isDocx) {
+        // DOCX - folosim mammoth să extragă textul
+        const mammoth = await import("https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js");
+        const arrayBuffer = await f.arrayBuffer();
+        const result = await mammoth.extractRawText({ arrayBuffer });
+        const text = result.value.slice(0, 25000);
+        reply = await callAPI([{role:"user",content:`Extrage TOATE rețetele din acest text. Pentru fiecare rețetă: **Nume rețetă** bold, ingrediente cu gramaje exacte, pași detaliați de preparare, valori nutriționale dacă există. Separă rețetele clar. Răspunde în română.\n\nTextul documentului:\n${text}`}], profil, undefined, {});
+      } else {
+        // TXT - citim direct
+        const text = await new Promise((res) => {
+          const r = new FileReader();
+          r.onload = () => res(r.result);
+          r.readAsText(f, "UTF-8");
+        });
+        reply = await callAPI([{role:"user",content:`Extrage TOATE rețetele din acest text. Pentru fiecare: **Nume** bold, ingrediente cu gramaje, pași detaliați, valori nutriționale. Răspunde în română.\n\n${text.slice(0,25000)}`}], profil, undefined, {});
+      }
+
+      const result = await addReteta(userId,{nume:f.name.replace(/\.[^/.]+$/,""),continut:reply,tip:f.type});
+      console.log("addReteta result:",result);
+      await reload(userId);
+      alert("✅ Rețetele salvate în cloud!");
+    } catch(e){ console.error(e); alert("Eroare: "+e.message); }
+    finally{ setLoading(false); if(fRef.current)fRef.current.value=""; }
   }
 
   async function del(id){ await deleteReteta(userId,id); setRetete(p=>p.filter(r=>r.id!==id)); if(sel?.id===id)setSel(null); }
