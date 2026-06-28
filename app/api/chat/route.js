@@ -82,10 +82,23 @@ TASK: 5 idei concrete pentru azi:
   }
 
   // Convert messages to Gemini format
-  const geminiMessages = messages.map(m => ({
-    role: m.role === "assistant" ? "model" : "user",
-    parts: [{ text: typeof m.content === "string" ? m.content : JSON.stringify(m.content) }]
-  }));
+  const geminiMessages = messages.map(m => {
+    let parts = [];
+    if (typeof m.content === "string") {
+      parts = [{ text: m.content }];
+    } else if (Array.isArray(m.content)) {
+      parts = m.content.map(c => {
+        if (c.text) return { text: c.text };
+        if (c.inline_data) return { inline_data: c.inline_data };
+        if (c.type === "image" && c.source) return { inline_data: { mime_type: c.source.media_type, data: c.source.data } };
+        if (c.type === "text") return { text: c.text };
+        return { text: JSON.stringify(c) };
+      });
+    } else {
+      parts = [{ text: String(m.content) }];
+    }
+    return { role: m.role === "assistant" ? "model" : "user", parts };
+  });
 
   const body = {
     system_instruction: { parts: [{ text: systemPrompt }] },
