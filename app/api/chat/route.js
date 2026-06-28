@@ -1,126 +1,81 @@
 export async function POST(req) {
   const { messages, profil, tip, context } = await req.json();
 
-  const profilText = profil ? `
-PROFILUL COMPLET:
-- Nume: ${profil.nume || "Marius"}, VĂ˘rstÄ: ${profil.varsta || 44} ani
-- Greutate: ${profil.greutate || "?"} kg, ĂŽnÄlČ›ime: ${profil.inaltime || "?"} cm
-- Obiectiv: ${profil.obiectivSpecific || "scÄderea circumferinČ›ei abdomenului cu 8 cm"}
-- Tratamente: ${profil.tratamente || "criolipolizÄ 3 Č™edinČ›e"}
-- Calorii Č›intÄ: ${profil.calorii || 1600} kcal/zi
-- RestricČ›ii: ${profil.restrictii || "fÄrÄ gluten, low-carb"}
-- Activitate: ${profil.activitate || "sedentar"}
-- Echipament: ${profil.echipament || "acasÄ, fÄrÄ echipament"}
-- Timp sport: ${profil.timpSport || "30 min/zi"}
-- LimitÄri fizice: genunchi sensibili (nu poate alerga, genuflexiuni dor), spate neantrenat, 44 ani â€” program PROGRESIV Č™i BLĂ‚ND
-- Alte info: ${profil.altele || ""}` : "Utilizator 44 ani, low-carb fÄrÄ gluten, ~1600 kcal/zi, limitÄri genunchi Č™i spate.";
+  const p = profil || {};
+  const profilText = `
+PROFILUL UTILIZATORULUI:
+- Nume: ${p.nume || "Marius"}, Vârstă: ${p.varsta || 44} ani
+- Greutate: ${p.greutate || "?"} kg, Înălțime: ${p.inaltime || "?"} cm
+- Obiectiv: ${p.obiectivSpecific || "scăderea circumferinței abdomenului cu 8 cm"}
+- Tratamente: ${p.tratamente || "criolipoliză 3 ședințe"}
+- Calorii țintă: ${p.calorii || 1600} kcal/zi
+- Restricții: ${p.restrictii || "fără gluten, low-carb"}
+- Limitări fizice: genunchi sensibili, spate neantrenat, 44 ani, stil sedentar
+- Echipament: ${p.echipament || "acasă, fără echipament"}`;
 
-  const memoryText = context?.memory?.length > 0 ? `
-MEMORIA PE TERMEN LUNG (foloseČ™te activ):
-${context.memory.slice(0, 25).map((m, i) => `${i+1}. [${m.tip || "conv"}${m.rezolvat ? " âś“REZOLVAT" : ""}] ${m.content}`).join("\n")}` : "";
-
-  const jurnalText = context?.jurnal?.length > 0 ? `
-JURNAL RECENT (ultimele mese):
-${context.jurnal.slice(0, 15).map(j => `- ${j.data} [${j.tip_masa}]: ${j.item || ""} | ${j.calorii || 0}kcal P:${j.proteine||0}g C:${j.carbohidrati||0}g G:${j.grasimi||0}g`).join("\n")}` : "";
-
-  const progresText = context?.progres?.length > 0 ? (() => {
-    const p = context.progres;
-    const prima = p[0]; const ultima = p[p.length - 1];
-    const dKg = prima?.greutate && ultima?.greutate ? (ultima.greutate - prima.greutate).toFixed(1) : null;
-    const dCm = prima?.abdomen && ultima?.abdomen ? (ultima.abdomen - prima.abdomen).toFixed(1) : null;
-    return `
-PROGRES REAL:
-- Greutate: ${prima?.greutate || "?"}kg â†’ ${ultima?.greutate || "?"}kg ${dKg ? `(${parseFloat(dKg)<0?"slÄbit":"luat"} ${Math.abs(dKg)}kg)` : ""}
-- Abdomen: ${prima?.abdomen || "?"}cm â†’ ${ultima?.abdomen || "?"}cm ${dCm ? `(${parseFloat(dCm)<0?"redus":"crescut"} ${Math.abs(dCm)}cm)` : ""}`;
+  const ctx = context || {};
+  const memoryText = ctx.memory?.length ? `\nMEMORIE ANTERIOARĂ:\n${ctx.memory.slice(0,20).map((m,i) => `${i+1}. ${m.content}`).join("\n")}` : "";
+  const progresText = ctx.progres?.length > 1 ? (() => {
+    const prima = ctx.progres[0], ultima = ctx.progres[ctx.progres.length-1];
+    const dKg = prima.greutate && ultima.greutate ? (ultima.greutate - prima.greutate).toFixed(1) : null;
+    const dCm = prima.abdomen && ultima.abdomen ? (ultima.abdomen - prima.abdomen).toFixed(1) : null;
+    return `\nPROGRES: Greutate ${prima.greutate}→${ultima.greutate}kg ${dKg?`(${dKg}kg)`:""}. Abdomen ${prima.abdomen}→${ultima.abdomen}cm ${dCm?`(${dCm}cm)`:""}`;
   })() : "";
+  const reteteText = ctx.retete?.length ? `\nRETETE PROPRII: ${ctx.retete.map(r=>`"${r.nume}"`).join(", ")}` : "";
 
-  const statsText = context?.stats ? `
-STATISTICI DIETÄ‚: ${context.stats.zileCuJurnal} zile jurnal, medie ${context.stats.medieCalorii} kcal/zi` : "";
+  const systemBase = `Ești agentul personal de nutriție și sport al lui ${p.nume || "Marius"}. Ești mai bun decât Google AI pentru că îl cunoști complet.
+${profilText}${memoryText}${progresText}${reteteText}
 
-  const reteteText = context?.retete?.length > 0 ? `
-REČšETE PROPRII (foloseČ™te cĂ˘nd dai recomandÄri):
-${context.retete.map(r => `- "${r.nume}": ${r.continut?.slice(0, 100)}...`).join("\n")}` : "";
+REGULI:
+- Răspunde ÎNTOTDEAUNA în română
+- Fii SPECIFIC, nu generic — folosește datele reale ale utilizatorului
+- Pentru sport: NICIODATĂ alergat, genuflexiuni cu impact — adaptează pentru genunchi sensibili
+- Caută ÎNTOTDEAUNA online pentru produse specifice românești (Mega Image, Kaufland, Lidl etc.)
+- Când cauți un produs românesc specific (ex: salată Fiesta Mega Image), caută exact gramajul real`;
 
-  let systemPrompt = `EČ™ti agentul personal de nutriČ›ie Č™i sport al lui ${profil?.nume || "Marius"}.
-E™ti SUPERIOR Google AI pe nutriČ›ie personalizatÄ pentru cÄ Ă®l cunoČ™ti complet Č™i Ă®Č›i aminteČ™ti TOT.
-
-${profilText}
-${memoryText}
-${jurnalText}
-${progresText}
-${statsText}
-${reteteText}
-
-REGULI DE AUR:
-- RÄspunde ĂŽNTOTDEAUNA Ă®n romĂ˘nÄ
-- Fii SPECIFIC cu date reale din istoricul utilizatorului
-- Pentru sport: NICIODATÄ‚ alergat, genuflexiuni grele â€” adapteazÄ pentru genunchi sensibili Č™i spate neantrenat
-- CalculeazÄ apa: (${profil?.greutate || 80}kg Ă— 35ml) + (200ml Ă— fiecare gram sare peste 2g/zi)
-- ReferÄ-te la conversaČ›ii anterioare cĂ˘nd sunt relevante`;
+  let system = systemBase;
 
   if (tip === "jurnal") {
-    systemPrompt += `
+    system += `\n\nTASK: Calculează nutrienți complet pentru alimentele descrise.
+IMPORTANT: Caută online gramajul exact al produselor românești specifice (ex: salată Fiesta Mega Image = 120g, nu 150g).
+Referințe fără gramaj: ou=60g, măr=180g, pară=170g, banană=120g, felie pâine=30g.
 
-TASK JURNAL â€” CALCUL COMPLET:
-CalculeazÄ pentru FIECARE aliment Č™i oferÄ tabelul complet.
-
-ReferinČ›e fÄrÄ gramaj: ou=60g, mÄr=180g, parÄ=170g, bananÄ=120g, felie pĂ˘ine=30g, lingurÄ ulei=10g
-Pentru produse romĂ˘neČ™ti de marcÄ â†’ cautÄ online valorile exacte.
-
-FORMAT OBLIGATORIU:
-
-| Aliment | Cantitate | kcal | Proteine | CarbohidraČ›i | ZahÄr | GrÄsimi | Sare |
+FORMAT RĂSPUNS:
+| Aliment | Cantitate | kcal | Proteine | Carbohidrați | Zahăr | Grăsimi | Sare |
 |---------|-----------|------|----------|--------------|-------|---------|------|
-| ... | ... | ... | ... | ... | ... | ... | ... |
 
-đź“Š **TOTAL:**
-- **Calorii: ~X kcal** (din targetul de ${profil?.calorii || 1600} kcal/zi)
-- **Proteine: ~Xg | CarbohidraČ›i: ~Xg | ZahÄr: ~Xg | GrÄsimi: ~Xg | Sare: ~Xg**
-
-đź’§ **APÄ‚ RECOMANDATÄ‚:** X ml
-âš ď¸Ź **ObservaČ›ie personalizatÄ:** [bazatÄ pe istoricul Č™i obiectivele utilizatorului]`;
+📊 **TOTAL:**
+- **Calorii: ~X kcal** (target: ${p.calorii||1600} kcal/zi)
+- **Proteine: ~Xg | Carbohidrați: ~Xg | Zahăr: ~Xg | Grăsimi: ~Xg | Sare: ~Xg**
+💧 **Apă recomandată:** Xml
+💡 **Observație:** [personalizată]`;
   } else if (tip === "plan") {
-    systemPrompt += `
-
-TASK PLAN ALIMENTAR â€” NIVEL EXCELENČšÄ‚:
-7 zile complete. Pentru FIECARE masÄ:
-- Ingrediente cu gramaje EXACTE
-- PaČ™i de preparare DETALIAČšI pentru un Ă®ncepÄtor absolut
-- Timpi exacČ›i Č™i temperaturi
-- Sfaturi practice specifice
-- Tabel: kcal | Proteine | CarbohidraČ›i | ZahÄr | GrÄsimi | Sare
-- ApÄ recomandatÄ pe zi
-- Total macro-uri zilnice`;
+    system += `\n\nTASK: Plan alimentar COMPLET 7 zile.
+IMPORTANT: Generează TOATE cele 7 zile complet. Nu te opri la mijloc.
+Pentru fiecare masă: ingrediente exacte în grame, pași detaliați pentru începător, timpi de gătire, tabel nutrițional complet.
+Dacă nu poți genera toate 7 zile complet într-un răspuns, generează 3-4 zile COMPLETE și menționează că utilizatorul poate cere continuarea.`;
   } else if (tip === "sport") {
-    systemPrompt += `
-
-TASK SPORT â€” ADAPTAT LIMITÄ‚RILOR:
-Plan PROGRESIV Č™i SIGUR. Čšine cont de:
-- 44 ani, stil sedentar, genunchi sensibili, spate neantrenat
-- NICIODATÄ‚: alergat, genuflexiuni cu greutÄČ›i, exerciČ›ii cu impact mare
-- Include: tai-chi, stretching, yoga blĂ˘nd, mers progresiv, exerciČ›ii Ă®n Č™ezut/culcat
-- ExplicÄ EXACT cum se executÄ fiecare exerciČ›iu
-- MenČ›ioneazÄ semnale de alarmÄ (cĂ˘nd sÄ se opreascÄ)
-- Plan pe 3 luni cu progresie gradualÄ`;
-  } else if (tip === "idei_zilnice") {
-    systemPrompt += `
-
-TASK IDEI ZILNICE:
-5 idei concrete pentru azi, bazate pe istoricul Č™i progresul real:
-
-đźĄ— **NutriČ›ie:** [idee specificÄ cu cifre]
-đźŹ **MiČ™care:** [exerciČ›iu SAFE pentru genunchi/spate, cu duratÄ exactÄ]
-đź’§ **Hidratare:** [cantitate specificÄ bazatÄ pe greutate Č™i sare consumatÄ ieri]
-đź§ **Wellbeing:** [somn, stres, recuperare]
-đź’ˇ **Sfat zilnic:** [observaČ›ie personalizatÄ din istoricul sÄu specific]`;
+    system += `\n\nTASK: Plan sport PROGRESIV și SIGUR.
+- 44 ani, sedentar, genunchi sensibili, spate neantrenat
+- Include: tai-chi, stretching, yoga blând, mers progresiv
+- NICIODATĂ: alergat, genuflexiuni cu greutăți, impact mare
+- Explică EXACT fiecare exercițiu
+- Plan pe 3 luni cu progresie graduală`;
+  } else if (tip === "idei") {
+    system += `\n\nTASK: 5 idei concrete pentru azi:
+🥗 **Nutriție:** [idee specifică cu cifre]
+🏃 **Mișcare:** [exercițiu SAFE, cu durată exactă]
+💧 **Hidratare:** [cantitate specifică]
+🧘 **Wellbeing:** [somn, stres, recuperare]
+💡 **Sfat zilnic:** [personalizat din istoricul său]`;
   } else if (tip === "rezumat") {
-    systemPrompt = `CreeazÄ un rezumat CONCIS (3-4 fraze) al acestei conversaČ›ii pentru memorie pe termen lung. Include: subiecte principale, decizii luate, informaČ›ii personale importante, dacÄ o problemÄ e rezolvatÄ sau Ă®n curs. RÄspunde DOAR cu rezumatul, fÄrÄ introducere.`;
+    system = `Creează un rezumat CONCIS (3-4 fraze) al acestei conversații pentru memorie pe termen lung. Include subiecte principale, decizii, info personale importante. Răspunde DOAR cu rezumatul.`;
   }
 
   const body = {
     model: "claude-sonnet-4-6",
-    max_tokens: tip === "plan" ? 4000 : tip === "sport" ? 3000 : 2000,
-    system: systemPrompt,
+    max_tokens: tip === "plan" ? 4000 : 2000,
+    system,
     messages,
     tools: [{ type: "web_search_20250305", name: "web_search" }],
   };
@@ -137,7 +92,7 @@ TASK IDEI ZILNICE:
   });
 
   const data = await response.json();
-  if (data.error) { console.error("API error:", data.error); return Response.json({ reply: "Eroare API: " + data.error.message }); }
-  const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "Eroare la rÄspuns.";
+  if (data.error) return Response.json({ reply: "Eroare: " + data.error.message });
+  const text = data.content?.filter(b => b.type === "text").map(b => b.text).join("") || "Eroare la răspuns.";
   return Response.json({ reply: text });
 }
