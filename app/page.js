@@ -282,8 +282,17 @@ function JurnalMasa({ userId, data, tip, profil, ctx }) {
     const msgs = entry?.messages||[];
 
     if(tip==="apa") {
-      const ml = parseInt(txt.replace(/[^0-9]/g,""))||0;
-      const newApa = (entry?.apa_ml||0)+ml;
+      // Convert litri to ml
+      let ml = 0;
+      const litrMatch = txt.match(/([\d.]+)\s*l(itri?)?/i);
+      const mlMatch = txt.match(/([\d.]+)\s*ml/i);
+      const paharMatch = txt.match(/(\d+)\s*pahar/i);
+      if (litrMatch) ml = Math.round(parseFloat(litrMatch[1]) * 1000);
+      else if (mlMatch) ml = parseInt(mlMatch[1]);
+      else if (paharMatch) ml = parseInt(paharMatch[1]) * 250;
+      else ml = parseInt(txt.replace(/[^0-9]/g,"")) || 0;
+
+      const newApa = (entry?.apa_ml||0) + ml;
       const reply = `💧 Adăugat **${ml} ml**.\n**Total azi: ${newApa} ml** ${newApa>=2000?"✅ Hidratare optimă!":`— mai ai nevoie de ${2000-newApa} ml pentru minimul recomandat.`}`;
       const newMsgs = [...msgs,{role:"user",content:txt},{role:"assistant",content:reply}];
       const upd = {...entry,messages:newMsgs,apa_ml:newApa,item:"apa"};
@@ -300,23 +309,31 @@ function JurnalMasa({ userId, data, tip, profil, ctx }) {
       const apiMsgs = newMsgsTemp.map(m=>({role:m.role,content:m.content}));
       const reply = await callAPI(apiMsgs, profil, "jurnal", ctx);
 
-      const getN = (text,pat) => { const m=text.match(pat); return m?parseFloat(m[1]):0; };
-      const cal = getN(reply,/Calorii[^:*]*:\s*~?([\d.]+)/i);
-      const prot = getN(reply,/Proteine[^:*]*:\s*~?([\d.]+)/i);
-      const carb = getN(reply,/Carbohidra[^:*]*:\s*~?([\d.]+)/i);
-      const zah = getN(reply,/Zah[^:*]*:\s*~?([\d.]+)/i);
-      const gras = getN(reply,/Gr[aă]simi[^:*]*:\s*~?([\d.]+)/i);
-      const sare = getN(reply,/Sare[^:*]*:\s*~?([\d.]+)/i);
+      // More robust extraction - try multiple patterns
+      const getN = (text, pats) => {
+        for (const pat of pats) {
+          const m = text.match(pat);
+          if (m) return parseFloat(m[1]);
+        }
+        return 0;
+      };
+
+      const cal = getN(reply, [/\*\*Calorii[^:*]*:\s*~?([\d.]+)/i, /Calorii[^:]*:\s*~?([\d.]+)/i, /TOTAL[^]*?~?([\d.]+)\s*kcal/i]);
+      const prot = getN(reply, [/\*\*Proteine[^:*]*:\s*~?([\d.]+)/i, /Proteine[^:]*:\s*~?([\d.]+)/i]);
+      const carb = getN(reply, [/\*\*Carbohidra[^:*]*:\s*~?([\d.]+)/i, /Carbohidra[^:]*:\s*~?([\d.]+)/i]);
+      const zah = getN(reply, [/\*\*Zah[^:*]*:\s*~?([\d.]+)/i, /Zah[^:]*:\s*~?([\d.]+)/i]);
+      const gras = getN(reply, [/\*\*Gr[aă]simi[^:*]*:\s*~?([\d.]+)/i, /Gr[aă]simi[^:]*:\s*~?([\d.]+)/i]);
+      const sare = getN(reply, [/\*\*Sare[^:*]*:\s*~?([\d.]+)/i, /Sare[^:]*:\s*~?([\d.]+)/i]);
 
       const newMsgs = [...newMsgsTemp,{role:"assistant",content:reply}];
       const upd = {
         ...entry, messages:newMsgs, item:txt.slice(0,100),
-        calorii:Math.max(entry?.calorii||0,cal),
-        proteine:Math.max(entry?.proteine||0,prot),
-        carbohidrati:Math.max(entry?.carbohidrati||0,carb),
-        zaharuri:Math.max(entry?.zaharuri||0,zah),
-        grasimi:Math.max(entry?.grasimi||0,gras),
-        sare:Math.max(entry?.sare||0,sare),
+        calorii: cal > 0 ? cal : (entry?.calorii||0),
+        proteine: prot > 0 ? prot : (entry?.proteine||0),
+        carbohidrati: carb > 0 ? carb : (entry?.carbohidrati||0),
+        zaharuri: zah > 0 ? zah : (entry?.zaharuri||0),
+        grasimi: gras > 0 ? gras : (entry?.grasimi||0),
+        sare: sare > 0 ? sare : (entry?.sare||0),
         analiza:reply,
       };
       setEntry(upd);
@@ -381,6 +398,8 @@ function JurnalTab({ profil, ctx }) {
   const [activeMasa, setActiveMasa] = useState("mic_dejun");
   const [sumar, setSumar] = useState(null);
 
+  const [refreshSumar, setRefreshSumar] = useState(0);
+
   useEffect(()=>{ const uid=getUserId(); setUserId(uid); },[]);
 
   useEffect(()=>{
@@ -398,7 +417,7 @@ function JurnalTab({ profil, ctx }) {
       }),{calorii:0,proteine:0,carbohidrati:0,zaharuri:0,grasimi:0,sare:0,apa:0});
       setSumar(tot);
     });
-  },[userId,data,activeMasa]);
+  },[userId,data,activeMasa,refreshSumar]);
 
   const target = parseInt(profil?.calorii)||1600;
   const pct = sumar?Math.min(100,Math.round((sumar.calorii/target)*100)):0;
@@ -790,9 +809,21 @@ function ReteteTab({ profil }) {
     r.onload=async()=>{
       try {
         const b64=r.result.split(",")[1];
-        const mt=f.type.includes("pdf")?"application/pdf":"text/plain";
-        const reply=await callAPI([{role:"user",content:[{type:"document",source:{type:"base64",media_type:mt,data:b64}},{type:"text",text:"Extrage TOATE rețetele din acest document. Pentru fiecare: **Nume** bold, ingrediente cu gramaje, pași detaliați, valori nutriționale. Separă rețetele clar."}]}],profil,undefined,{});
-        const result=await addReteta(userId,{nume:f.name.replace(/\.[^/.]+$/,""),continut:reply,tip:f.type});
+        // Gemini accepta inline_data pentru PDF
+        const isPdf = f.type.includes("pdf");
+        let content;
+        if(isPdf) {
+          content = [
+            { inline_data: { mime_type: "application/pdf", data: b64 } },
+            { text: "Extrage TOATE rețetele din acest document. Pentru fiecare rețetă: **Nume rețetă** bold, ingrediente cu gramaje exacte, pași detaliați de preparare, valori nutriționale dacă există. Separă rețetele clar cu linie orizontală." }
+          ];
+        } else {
+          // Pentru Word/txt - citim ca text
+          const text = atob(b64);
+          content = `Extrage TOATE rețetele din acest document:\n\n${text.slice(0,30000)}\n\nPentru fiecare rețetă: **Nume** bold, ingrediente cu gramaje, pași detaliați, valori nutriționale. Separă rețetele clar.`;
+        }
+        const reply = await callAPI([{role:"user",content}], profil, undefined, {});
+        const result = await addReteta(userId,{nume:f.name.replace(/\.[^/.]+$/,""),continut:reply,tip:f.type});
         console.log("addReteta result:",result);
         await reload(userId);
         alert("✅ Rețetele salvate în cloud!");
