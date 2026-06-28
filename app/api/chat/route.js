@@ -97,7 +97,7 @@ TASK: 5 idei concrete pentru azi:
     tools: [{ google_search: {} }],
   };
 
-  const model = "gemini-1.5-flash-latest";
+  const model = "gemini-2.5-flash";
   const apiKey = process.env.GEMINI_API_KEY;
 
   const response = await fetch(
