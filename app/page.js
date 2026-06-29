@@ -785,102 +785,114 @@ function ProdusTab({ profil }) {
 
 // ── RETETE TAB ────────────────────────────────────────────────────────────────
 function ReteteTab({ profil }) {
-  const [retete,setRetete]=useState([]);
-  const [userId,setUserId]=useState(null);
-  const [loading,setLoading]=useState(false);
-  const [sel,setSel]=useState(null);
-  const [loadingR,setLoadingR]=useState(true);
-  const fRef=useRef(null);
+  const [retete, setRetete] = useState([]);
+  const [userId, setUserId] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [loadingR, setLoadingR] = useState(true);
+  const fRef = useRef(null);
 
   async function reload(uid) {
     setLoadingR(true);
-    const d = await getRetete(uid||userId);
-    console.log("Retete from DB:", d);
-    setRetete(d||[]);
+    const d = await getRetete(uid || userId);
+    setRetete(d || []);
     setLoadingR(false);
   }
 
-  useEffect(()=>{ const uid=getUserId(); setUserId(uid); reload(uid); },[]);
+  useEffect(() => { const uid = getUserId(); setUserId(uid); reload(uid); }, []);
 
   async function upload(e) {
-    const f=e.target.files[0]; if(!f) return;
+    const f = e.target.files[0]; if (!f) return;
     setLoading(true);
     try {
-      const isPdf = f.type.includes("pdf");
-      const isDocx = f.name.toLowerCase().endsWith(".docx") || f.type.includes("word");
-      const isTxt = f.type.includes("text") || f.name.toLowerCase().endsWith(".txt");
+      const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const SUPABASE_KEY = process.env.NEXT_PUBLIC_SUPABASE_KEY;
 
-      let reply = "";
+      // Upload fișier în Supabase Storage
+      const fileName = `${userId}_${Date.now()}_${f.name}`;
+      const uploadRes = await fetch(
+        `${SUPABASE_URL}/storage/v1/object/retete/${fileName}`,
+        {
+          method: "POST",
+          headers: {
+            "apikey": SUPABASE_KEY,
+            "Authorization": `Bearer ${SUPABASE_KEY}`,
+            "Content-Type": f.type,
+          },
+          body: f,
+        }
+      );
 
-      if(isPdf) {
-        // PDF - trimite ca inline_data la Gemini
-        const b64 = await new Promise((res) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result.split(",")[1]);
-          r.readAsDataURL(f);
-        });
-        const content = [
-          { inline_data: { mime_type: "application/pdf", data: b64 } },
-          { text: "Extrage TOATE rețetele din acest document. Pentru fiecare rețetă: **Nume rețetă** bold, ingrediente cu gramaje exacte, pași detaliați de preparare, valori nutriționale dacă există. Separă rețetele clar. Răspunde în română." }
-        ];
-        reply = await callAPI([{role:"user",content}], profil, undefined, {});
-      } else if(isDocx) {
-        // DOCX - folosim mammoth să extragă textul
-        const mammoth = await import("https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js");
-        const arrayBuffer = await f.arrayBuffer();
-        const result = await mammoth.extractRawText({ arrayBuffer });
-        const text = result.value.slice(0, 25000);
-        reply = await callAPI([{role:"user",content:`Extrage TOATE rețetele din acest text. Pentru fiecare rețetă: **Nume rețetă** bold, ingrediente cu gramaje exacte, pași detaliați de preparare, valori nutriționale dacă există. Separă rețetele clar. Răspunde în română.\n\nTextul documentului:\n${text}`}], profil, undefined, {});
-      } else {
-        // TXT - citim direct
-        const text = await new Promise((res) => {
-          const r = new FileReader();
-          r.onload = () => res(r.result);
-          r.readAsText(f, "UTF-8");
-        });
-        reply = await callAPI([{role:"user",content:`Extrage TOATE rețetele din acest text. Pentru fiecare: **Nume** bold, ingrediente cu gramaje, pași detaliați, valori nutriționale. Răspunde în română.\n\n${text.slice(0,25000)}`}], profil, undefined, {});
+      if (!uploadRes.ok) {
+        const err = await uploadRes.text();
+        throw new Error("Upload storage failed: " + err);
       }
 
-      const result = await addReteta(userId,{nume:f.name.replace(/\.[^/.]+$/,""),continut:reply,tip:f.type});
-      console.log("addReteta result:",result);
+      // URL public al fișierului
+      const fileUrl = `${SUPABASE_URL}/storage/v1/object/public/retete/${fileName}`;
+
+      // Salvează referința în DB
+      const result = await addReteta(userId, {
+        nume: f.name.replace(/\.[^/.]+$/, ""),
+        continut: f.name, // păstrăm numele original
+        tip: f.type,
+        file_url: fileUrl,
+      });
+
       await reload(userId);
-      alert("✅ Rețetele salvate în cloud!");
-    } catch(e){ console.error(e); alert("Eroare: "+e.message); }
-    finally{ setLoading(false); if(fRef.current)fRef.current.value=""; }
+      alert("✅ Fișierul a fost salvat în cloud!");
+    } catch (e) {
+      console.error(e);
+      alert("Eroare la upload: " + e.message);
+    } finally {
+      setLoading(false);
+      if (fRef.current) fRef.current.value = "";
+    }
   }
 
-  async function del(id){ await deleteReteta(userId,id); setRetete(p=>p.filter(r=>r.id!==id)); if(sel?.id===id)setSel(null); }
-
-  if(sel) return (
-    <div style={{padding:"0 20px",overflowY:"auto",flex:1}}>
-      <button onClick={()=>setSel(null)} style={{background:"#1a1f2e",border:"1px solid #2a3040",borderRadius:10,color:"#94a3b8",padding:"8px 14px",cursor:"pointer",fontSize:13,marginBottom:14}}>← Lista rețete</button>
-      <div style={{color:"#22c55e",fontSize:16,fontWeight:700,marginBottom:6}}>📄 {sel.nume}</div>
-      <div style={{color:"#4a5568",fontSize:11,marginBottom:12}}>{sel.created_at?new Date(sel.created_at).toLocaleDateString("ro-RO"):""}</div>
-      <div style={{color:"#e2e8f0",fontSize:14,lineHeight:1.8,paddingBottom:20}}><Txt text={sel.continut} /></div>
-    </div>
-  );
+  async function del(id) {
+    await deleteReteta(userId, id);
+    setRetete(p => p.filter(r => r.id !== id));
+  }
 
   return (
-    <div style={{padding:"0 20px",overflowY:"auto",flex:1}}>
-      <div style={{display:"flex",gap:8,marginBottom:8}}>
-        <button onClick={()=>fRef.current?.click()} disabled={loading} style={{flex:1,padding:"14px",background:loading?"#2a3040":"linear-gradient(135deg,#16a34a,#22c55e)",border:"none",borderRadius:12,color:"white",fontSize:14,fontWeight:700,cursor:loading?"default":"pointer"}}>
-          {loading?"⏳ Se procesează...":"📤 Încarcă rețete (PDF/Word)"}
+    <div style={{ padding: "0 20px", overflowY: "auto", flex: 1 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+        <button onClick={() => fRef.current?.click()} disabled={loading}
+          style={{ flex: 1, padding: "14px", background: loading ? "#2a3040" : "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 12, color: "white", fontSize: 14, fontWeight: 700, cursor: loading ? "default" : "pointer" }}>
+          {loading ? "⏳ Se încarcă..." : "📤 Încarcă rețete (PDF sau Word)"}
         </button>
-        <button onClick={()=>reload(userId)} style={{padding:"14px",background:"#1a1f2e",border:"1px solid #2a3040",borderRadius:12,color:"#94a3b8",fontSize:14,cursor:"pointer"}} title="Reîncarcă din cloud">🔄</button>
+        <button onClick={() => reload(userId)} style={{ padding: "14px", background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 12, color: "#94a3b8", fontSize: 14, cursor: "pointer" }}>🔄</button>
       </div>
-      <input ref={fRef} type="file" accept=".pdf,.doc,.docx,.txt" onChange={upload} style={{display:"none"}} />
-      <div style={{color:"#4a5568",fontSize:12,textAlign:"center",marginBottom:14}}>Agentul extrage rețetele și le salvează permanent în cloud. Apasă 🔄 dacă nu apar imediat.</div>
+      <input ref={fRef} type="file" accept=".pdf,.doc,.docx,.txt" onChange={upload} style={{ display: "none" }} />
+      <div style={{ color: "#4a5568", fontSize: 12, textAlign: "center", marginBottom: 16 }}>
+        Fișierele se salvează în cloud și le poți descărca oricând.
+      </div>
 
-      {loadingR?<div style={{textAlign:"center",color:"#4a5568",padding:"40px 0"}}>Se încarcă rețetele din cloud...</div>:
-      !retete.length?<div style={{textAlign:"center",color:"#4a5568",padding:"40px 0"}}><div style={{fontSize:40,marginBottom:12}}>📚</div><div>Nicio rețetă încărcată.</div><div style={{fontSize:12,marginTop:8}}>Apasă butonul pentru a încărca un PDF sau Word.</div></div>:(
-        <div style={{display:"flex",flexDirection:"column",gap:10,paddingBottom:20}}>
-          {retete.map(r=>(
-            <div key={r.id} onClick={()=>setSel(r)} style={{background:"#1a1f2e",border:"1px solid #2a3040",borderRadius:12,padding:"12px 16px",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-              <div>
-                <div style={{color:"#22c55e",fontSize:14,fontWeight:600}}>📄 {r.nume}</div>
-                <div style={{color:"#4a5568",fontSize:11,marginTop:2}}>{r.created_at?new Date(r.created_at).toLocaleDateString("ro-RO"):""} · Click pentru a citi</div>
+      {loadingR ? (
+        <div style={{ textAlign: "center", color: "#4a5568", padding: "40px 0" }}>Se încarcă...</div>
+      ) : !retete.length ? (
+        <div style={{ textAlign: "center", color: "#4a5568", padding: "40px 0" }}>
+          <div style={{ fontSize: 40, marginBottom: 12 }}>📚</div>
+          <div>Nicio rețetă încărcată.</div>
+          <div style={{ fontSize: 12, marginTop: 8 }}>Încarcă un PDF sau Word cu rețetele tale.</div>
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 10, paddingBottom: 20 }}>
+          {retete.map(r => (
+            <div key={r.id} style={{ background: "#1a1f2e", border: "1px solid #2a3040", borderRadius: 12, padding: "12px 16px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: "#22c55e", fontSize: 14, fontWeight: 600 }}>📄 {r.nume}</div>
+                <div style={{ color: "#4a5568", fontSize: 11, marginTop: 2 }}>{r.created_at ? new Date(r.created_at).toLocaleDateString("ro-RO") : ""}</div>
               </div>
-              <button onClick={e=>{e.stopPropagation();del(r.id);}} style={{background:"transparent",border:"none",color:"#ef4444",cursor:"pointer",fontSize:16,padding:"4px 8px"}}>🗑️</button>
+              <div style={{ display: "flex", gap: 8 }}>
+                {r.file_url && (
+                  <a href={r.file_url} download target="_blank" rel="noopener noreferrer"
+                    style={{ background: "linear-gradient(135deg,#16a34a,#22c55e)", border: "none", borderRadius: 8, color: "white", padding: "6px 12px", fontSize: 12, fontWeight: 600, cursor: "pointer", textDecoration: "none" }}>
+                    ⬇️ Descarcă
+                  </a>
+                )}
+                <button onClick={() => del(r.id)} style={{ background: "transparent", border: "none", color: "#ef4444", cursor: "pointer", fontSize: 16, padding: "4px 8px" }}>🗑️</button>
+              </div>
             </div>
           ))}
         </div>
