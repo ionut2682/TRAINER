@@ -107,8 +107,12 @@ TASK: 5 idei concrete pentru azi:
       temperature: 0.7,
       maxOutputTokens: tip === "plan" ? 4000 : 2000,
     },
-    tools: [{ google_search: {} }],
   };
+
+  // Adaugă web search doar pentru jurnal și chat general, NU pentru retete/documente
+  if (tip === "jurnal") {
+    body.tools = [{ google_search: {} }];
+  }
 
   const model = "gemini-2.5-flash";
   const apiKey = process.env.GEMINI_API_KEY;
