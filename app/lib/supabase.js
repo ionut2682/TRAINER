@@ -156,7 +156,7 @@ export async function getRetete(userId) {
   return await sb(`retete_proprii?user_id=eq.${userId}&order=created_at.desc`) || [];
 }
 export async function addReteta(userId, item) {
-  return await sb("retete_proprii", "POST", { user_id: userId, nume: item.nume, continut: item.continut, tip: item.tip || "pdf" });
+  return await sb("retete_proprii", "POST", { user_id: userId, nume: item.nume, continut: item.continut, tip: item.tip || "pdf", file_url: item.file_url || null });
 }
 export async function deleteReteta(userId, id) {
   return await sb(`retete_proprii?user_id=eq.${userId}&id=eq.${id}`, "DELETE");
